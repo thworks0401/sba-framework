@@ -15,3 +15,20 @@ logs/
 
 # Brain data (本番環境で適宜調整)
 brain_bank/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+
+# VSCode
+.vscode/
+
+# Logs
+logs/
+
+# Brain data (本番環境で適宜調整)
+brain_bank/
