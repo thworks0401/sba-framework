@@ -32,3 +32,6 @@ logs/
 
 # Brain data (本番環境で適宜調整)
 brain_bank/
+
+config/.env
+.env
