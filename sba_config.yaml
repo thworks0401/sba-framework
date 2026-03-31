@@ -1,0 +1,8 @@
+﻿project_root: C:\TH_Works\SBA
+paths:
+  brain_bank: C:\TH_Works\SBA\brain_bank
+  logs: C:\TH_Works\SBA\logs
+api_keys:
+  gemini: \
+thresholds:
+  default: 0.5
