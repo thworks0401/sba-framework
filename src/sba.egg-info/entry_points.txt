@@ -1,0 +1,2 @@
+[console_scripts]
+sba = sba.__main__:main

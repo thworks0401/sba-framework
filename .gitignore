@@ -35,3 +35,4 @@ brain_bank/
 
 config/.env
 .env
+.aider*
