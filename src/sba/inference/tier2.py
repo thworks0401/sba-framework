@@ -6,7 +6,13 @@ Tier2 推論エンジン（Gemini 2.5 Flash @ Google API）
   - VRAM使用量: 0GB（外部API、ローカルVRAM消費なし）
   - 無料枠: 15 req/min・1,500 req/day・1M tokens/min
   - 用途: 大量テキスト処理・長文要約・Tier1フォールバック
-  - 残枠チェック: api_usage.db から残량確認、100以下で呼び出し拒否
+  - 残枠チェック: api_usage.db から残量確認、100以下で呼び出し拒否
+
+【修正履歴】
+  旧実装: api_usage_db_path のデフォルトが "C:/SBA/data/api_usage.db" のハードコード。
+  新実装: SBAConfig.load_env() から cfg.data を取得してパスを解決するように変更。
+          SBAConfig がロードできない環境では GEMINI_API_KEY 環境変数のみで動作する
+          フォールバックパスも保持。
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from pathlib import Path
 import google.generativeai as genai
 
 from ..storage.api_usage_db import APIUsageRepository
+from ..config import SBAConfig
 
 
 class Tier2Error(Exception):
@@ -42,34 +49,79 @@ class Tier2Engine:
     Gemini 2.5 Flash による補完推論エンジン。
 
     大量テキスト処理・要約・Tier1待機時間超過時のフォールバック用。
-    APIレート管理はapi_usage.db と連携。
+    APIレート管理は api_usage.db（SBAConfig.data 配下）と連携。
     """
 
-    MODEL_NAME = "gemini-2.5-flash"
-    API_NAME = "gemini"
-    MIN_TOKENS_THRESHOLD = 100  # 残トークン100以下でTier1フォールバック
+    MODEL_NAME            = "gemini-2.5-flash"
+    API_NAME              = "gemini"
+    MIN_TOKENS_THRESHOLD  = 100   # 残トークン 100 以下で Tier1 フォールバック
 
-    def __init__(self, api_key: Optional[str] = None, api_usage_db_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_usage_db_path: Optional[str] = None,
+    ) -> None:
         """
         Initialize Tier2 Engine.
 
         Args:
-            api_key: Google API キー（env: GEMINI_API_KEY）
-            api_usage_db_path: APIUsageRepository DB パス（デフォルト: C:/SBA/data/api_usage.db）
+            api_key: Google API キー（省略時: 環境変数 GEMINI_API_KEY または sba_config.yaml）
+            api_usage_db_path: APIUsageRepository DB パス（省略時: SBAConfig.data から解決）
         """
-        # APIキー取得
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        # --- APIキー取得 ---
+        self.api_key = api_key or self._resolve_api_key()
         if not self.api_key:
-            raise Tier2Error("GEMINI_API_KEY not set in environment")
+            raise Tier2Error(
+                "Gemini API キーが設定されていません。"
+                "環境変数 GEMINI_API_KEY または sba_config.yaml の api_keys.gemini に設定してください。"
+            )
 
         genai.configure(api_key=self.api_key)
         self.client = genai.GenerativeModel(self.MODEL_NAME)
 
-        # APIレート管理
-        if api_usage_db_path is None:
-            api_usage_db_path = "C:/SBA/data/api_usage.db"
-        self.api_repo = APIUsageRepository(str(api_usage_db_path))
+        # --- API 使用量 DB パス解決 ---
+        resolved_db_path = api_usage_db_path or self._resolve_db_path()
+        self.api_repo = APIUsageRepository(resolved_db_path)
         self._latest_latency = 0.0
+
+    @staticmethod
+    def _resolve_api_key() -> Optional[str]:
+        """
+        API キーを以下の優先順で解決:
+          1. 環境変数 GEMINI_API_KEY
+          2. sba_config.yaml の api_keys.gemini
+        """
+        # 環境変数優先
+        env_key = os.getenv("GEMINI_API_KEY")
+        if env_key:
+            return env_key
+
+        # sba_config.yaml フォールバック
+        try:
+            cfg = SBAConfig.load_env()
+            if cfg.api_keys.gemini:
+                return cfg.api_keys.gemini
+        except Exception:
+            pass
+
+        return None
+
+    @staticmethod
+    def _resolve_db_path() -> str:
+        """
+        api_usage.db のパスを SBAConfig から解決。
+        SBAConfig がロードできない場合はフォールバックパスを返す。
+        """
+        try:
+            cfg = SBAConfig.load_env()
+            return str(cfg.data / "api_usage.db")
+        except Exception:
+            # SBAConfig が使えない環境（テスト等）向けのフォールバック
+            return "C:/TH_Works/SBA/data/api_usage.db"
+
+    # ======================================================================
+    # 推論
+    # ======================================================================
 
     async def infer(
         self,
@@ -79,9 +131,9 @@ class Tier2Engine:
         timeout_s: float = 30.0,
     ) -> InferenceResult:
         """
-        Gemini推論リクエストを実行。
+        Gemini 推論リクエストを実行。
 
-        事前に api_usage.db の残量をチェック。不足時はエラー。
+        事前に api_usage.db の残量をチェック。不足時はエラーを返す。
 
         Args:
             prompt: 入力プロンプト
@@ -98,14 +150,16 @@ class Tier2Engine:
             return InferenceResult(
                 text="",
                 latency_ms=0.0,
-                error=f"Tier2 quota exceeded (remaining={remaining}, threshold={self.MIN_TOKENS_THRESHOLD}). "
-                      f"Fallback to Tier1.",
+                error=(
+                    f"Tier2 quota exceeded "
+                    f"(remaining={remaining}, threshold={self.MIN_TOKENS_THRESHOLD}). "
+                    f"Fallback to Tier1."
+                ),
             )
 
         try:
             start_time = time.time()
 
-            # Gemini呼び出し
             response = self.client.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -120,18 +174,18 @@ class Tier2Engine:
 
             text = response.text.strip() if response.text else ""
 
-            # トークン計測（Gemini APIから取得可能な場合）
+            # トークン計測
             tokens_used = None
             if hasattr(response, "usage_metadata"):
                 tokens_used = response.usage_metadata.candidates_token_count
 
             # APIレート記録
-            estimated_input_tokens = len(prompt.split()) + len(prompt) // 4
-            estimated_output_tokens = tokens_used or (len(text.split()) + len(text) // 4)
+            estimated_input  = len(prompt.split()) + len(prompt) // 4
+            estimated_output = tokens_used or (len(text.split()) + len(text) // 4)
             self.api_repo.increment_usage(
                 self.API_NAME,
                 req_count=1,
-                token_count=estimated_input_tokens + estimated_output_tokens,
+                token_count=estimated_input + estimated_output,
             )
 
             return InferenceResult(
@@ -162,15 +216,6 @@ class Tier2Engine:
     ) -> InferenceResult:
         """
         大量テキスト要約（Tier2特化タスク）。
-
-        Args:
-            text: 要約対象のテキスト
-            max_length: 要約の最大文字数
-            temperature: 低めの温度で確定的に
-            timeout_s: タイムアウト秒数
-
-        Returns:
-            InferenceResult: 要約結果
         """
         prompt = f"""以下のテキストを日本語で {max_length} 文字以下で要約してください。
 
@@ -181,52 +226,41 @@ class Tier2Engine:
 
         return await self.infer(
             prompt,
-            max_tokens=int(max_length / 4),  # 概算: 4文字 ≈ 1トークン
+            max_tokens=int(max_length / 4),
             temperature=temperature,
             timeout_s=timeout_s,
         )
 
     def extract_json(self, text: str) -> Optional[dict]:
-        """
-        推論結果からJSON部分を抽出。
-
-        Args:
-            text: 推論結果テキスト
-
-        Returns:
-            パースされたdict、またはNone
-        """
+        """推論結果からJSON部分を抽出。"""
         # ```json ... ``` パターン
         code_match = re.search(r'```(?:json)?\s*(\{.+?\})\s*```', text, re.DOTALL)
         if code_match:
-            json_str = code_match.group(1)
             try:
-                return json.loads(json_str)
+                return json.loads(code_match.group(1))
             except json.JSONDecodeError:
                 pass
 
         # 生JSON パターン
         json_match = re.search(r'(\{.+?\})', text, re.DOTALL)
         if json_match:
-            json_str = json_match.group(1)
             try:
-                return json.loads(json_str)
+                return json.loads(json_match.group(1))
             except json.JSONDecodeError:
                 pass
 
         return None
 
+    # ======================================================================
+    # 状態取得
+    # ======================================================================
+
     def get_latest_latency(self) -> float:
-        """最新レイテンシを取得"""
+        """最新レイテンシを取得（秒）"""
         return self._latest_latency
 
     async def is_alive(self) -> bool:
-        """
-        Gemini接続確認。
-
-        Returns:
-            True if Gemini is responsive
-        """
+        """Gemini 接続確認。"""
         try:
             result = await self.infer("hello", max_tokens=10, timeout_s=5.0)
             return result.error is None
@@ -235,13 +269,17 @@ class Tier2Engine:
 
     def get_remaining_quota(self) -> dict:
         """
-        現在のQuota状態を取得。
+        現在の Quota 状態を取得。
 
         Returns:
-            {"remaining_tokens": int, "daily_used": int, "status": "active"|"throttled"|"stopped"}
+            {
+                "remaining_tokens": int | None,
+                "daily_used": int,
+                "status": "active" | "throttled" | "stopped"
+            }
         """
         remaining = self.api_repo.get_remaining_tokens(self.API_NAME)
-        daily = self.api_repo.get_today_usage(self.API_NAME)
+        daily     = self.api_repo.get_today_usage(self.API_NAME)
 
         status = "active"
         if remaining is not None:
@@ -252,6 +290,6 @@ class Tier2Engine:
 
         return {
             "remaining_tokens": remaining,
-            "daily_used": daily.get("token_count", 0) if daily else 0,
-            "status": status,
+            "daily_used":       daily.get("token_count", 0) if daily else 0,
+            "status":           status,
         }

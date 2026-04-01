@@ -80,6 +80,10 @@ class TimelineRepository:
         conn.commit()
         conn.close()
 
+    # ======================================================================
+    # 書き込み
+    # ======================================================================
+
     def insert_timeline(
         self,
         brain_id: str,
@@ -92,16 +96,7 @@ class TimelineRepository:
         freshness: float = 1.0,
     ) -> str:
         """
-        学習タイムライン追加.
-
-        Args:
-            brain_id: Brain UUID
-            source_type: Web / PDF / Video / API / Experiment
-            content_hash: SHA-256(content)
-            subskill: 主 SubSkill ID
-            url_or_path: ソース URL または ファイルパス
-            qdrant_ids: Qdrant point ID リスト
-            kg_node_ids: Kuzu KnowledgeChunk ID リスト
+        学習タイムライン追加。
 
         Returns:
             timeline ID (UUID)
@@ -109,8 +104,8 @@ class TimelineRepository:
         timeline_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + "Z"
 
-        qdrant_ids_json = json.dumps(qdrant_ids or [])
-        kg_node_ids_json = json.dumps(kg_node_ids or [])
+        qdrant_ids_json   = json.dumps(qdrant_ids   or [])
+        kg_node_ids_json  = json.dumps(kg_node_ids  or [])
 
         conn = self._get_conn()
         cursor = conn.cursor()
@@ -130,6 +125,10 @@ class TimelineRepository:
 
         return timeline_id
 
+    # ======================================================================
+    # 読み取り
+    # ======================================================================
+
     def get_timeline_entry(self, timeline_id: str) -> dict | None:
         """タイムライン取得"""
         conn = self._get_conn()
@@ -142,16 +141,11 @@ class TimelineRepository:
         if not row:
             return None
 
-        row_dict = dict(row)
-        # JSON 解析
-        row_dict["qdrant_ids"] = json.loads(row_dict["qdrant_ids"] or "[]")
-        row_dict["kg_node_ids"] = json.loads(row_dict["kg_node_ids"] or "[]")
-
-        return row_dict
+        return self._parse_row(dict(row))
 
     def check_duplicate_by_hash(self, content_hash: str) -> Optional[str]:
         """
-        content_hash による重複チェック.
+        content_hash による重複チェック。
 
         Returns:
             既存 timeline_id or None
@@ -181,15 +175,63 @@ class TimelineRepository:
             LIMIT ?
         """, (subskill, limit))
 
-        results = []
-        for row in cursor.fetchall():
-            row_dict = dict(row)
-            row_dict["qdrant_ids"] = json.loads(row_dict["qdrant_ids"] or "[]")
-            row_dict["kg_node_ids"] = json.loads(row_dict["kg_node_ids"] or "[]")
-            results.append(row_dict)
-
+        results = [self._parse_row(dict(row)) for row in cursor.fetchall()]
         conn.close()
         return results
+
+    def get_timeline_by_kg_node(self, kg_node_id: str) -> Optional[dict]:
+        """
+        Kuzu KnowledgeChunk ID で Timeline エントリを検索。
+
+        KnowledgeStore.mark_deprecated() から呼ばれる。
+        JSON 文字列 kg_node_ids に対する LIKE 検索を使用する。
+
+        Args:
+            kg_node_id: Kuzu KnowledgeChunk UUID
+
+        Returns:
+            マッチした Timeline エントリ、見つからなければ None
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        # kg_node_ids は JSON 配列文字列 e.g. '["uuid-a", "uuid-b"]'
+        # UUID を JSON 文字列内で検索する（部分一致: "uuid"）
+        cursor.execute(
+            'SELECT * FROM timeline WHERE kg_node_ids LIKE ?',
+            (f'%"{kg_node_id}"%',),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return self._parse_row(dict(row))
+
+    def get_outdated_entries(
+        self,
+        brain_id: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        """古い学習データ取得（freshness < 0.4）"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM timeline
+            WHERE brain_id = ? AND is_outdated = 1
+            ORDER BY freshness ASC
+            LIMIT ?
+        """, (brain_id, limit))
+
+        results = [self._parse_row(dict(row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # ======================================================================
+    # 更新
+    # ======================================================================
 
     def update_freshness(
         self,
@@ -211,31 +253,9 @@ class TimelineRepository:
         conn.commit()
         conn.close()
 
-    def get_outdated_entries(
-        self,
-        brain_id: str,
-        limit: int = 100,
-    ) -> list[dict]:
-        """古い学習データ取得（freshness < 0.4）"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT * FROM timeline
-            WHERE brain_id = ? AND is_outdated = 1
-            ORDER BY freshness ASC
-            LIMIT ?
-        """, (brain_id, limit))
-
-        results = []
-        for row in cursor.fetchall():
-            row_dict = dict(row)
-            row_dict["qdrant_ids"] = json.loads(row_dict["qdrant_ids"] or "[]")
-            row_dict["kg_node_ids"] = json.loads(row_dict["kg_node_ids"] or "[]")
-            results.append(row_dict)
-
-        conn.close()
-        return results
+    # ======================================================================
+    # 統計
+    # ======================================================================
 
     def get_stats(self, brain_id: str) -> dict:
         """学習統計"""
@@ -255,8 +275,19 @@ class TimelineRepository:
         conn.close()
 
         return {
-            "total_entries": row[0] or 0,
-            "source_types": row[1] or 0,
-            "avg_freshness": row[2] or 0.0,
+            "total_entries":    row[0] or 0,
+            "source_types":     row[1] or 0,
+            "avg_freshness":    row[2] or 0.0,
             "outdated_entries": row[3] or 0,
         }
+
+    # ======================================================================
+    # 内部ユーティリティ
+    # ======================================================================
+
+    @staticmethod
+    def _parse_row(row_dict: dict) -> dict:
+        """JSON カラムをデシリアライズ"""
+        row_dict["qdrant_ids"]  = json.loads(row_dict.get("qdrant_ids")  or "[]")
+        row_dict["kg_node_ids"] = json.loads(row_dict.get("kg_node_ids") or "[]")
+        return row_dict

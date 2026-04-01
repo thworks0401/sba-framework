@@ -22,10 +22,17 @@ import ollama
 
 class ModelType(Enum):
     """モデルタイプ"""
-    TIER1 = "tier1"  # Phi-4:14B
-    TIER3 = "tier3"  # Qwen2.5-Coder:7B
+    TIER1   = "tier1"    # Phi-4:14B
+    TIER3   = "tier3"    # Qwen2.5-Coder:7B
     WHISPER = "whisper"  # faster-whisper
-    NONE = "none"
+    NONE    = "none"
+
+
+# Ollama モデル名マッピング（アンロード時に使用）
+_OLLAMA_MODEL_NAMES = {
+    ModelType.TIER1: "phi4",
+    ModelType.TIER3: "qwen2.5-coder:7b",
+}
 
 
 class VRAMGuardError(Exception):
@@ -59,10 +66,10 @@ class VRAMGuard:
             model_type: 要求するモデルタイプ
 
         Returns:
-            True if lock acquired, False if timeout
+            True if lock acquired
 
         Raises:
-            VRAMGuardError: 禁止された組み合わせ
+            VRAMGuardError: タイムアウトまたは禁止された組み合わせ
         """
         # 禁止組み合わせチェック
         self._check_compatibility(model_type)
@@ -107,20 +114,17 @@ class VRAMGuard:
         """
         新規モデル起動の互換性をチェック。
 
-        Args:
-            model_type: 起動するモデルタイプ
-
         Raises:
             VRAMGuardError: 禁止された組み合わせ
         """
         if self._current_model == ModelType.NONE:
             return  # OK: 現在、どのモデルも動作していない
 
-        # 禁止パターン
+        # 禁止パターン（双方向）
         forbidden_pairs = [
-            (ModelType.TIER1, ModelType.TIER3),
-            (ModelType.TIER3, ModelType.TIER1),
-            (ModelType.TIER1, ModelType.WHISPER),
+            (ModelType.TIER1,   ModelType.TIER3),
+            (ModelType.TIER3,   ModelType.TIER1),
+            (ModelType.TIER1,   ModelType.WHISPER),
             (ModelType.WHISPER, ModelType.TIER1),
         ]
 
@@ -134,62 +138,51 @@ class VRAMGuard:
     def _unload_conflicting_models(self, model_type: ModelType) -> None:
         """
         起動するモデルと競合するOllamaモデルをアンロード。
-
-        Args:
-            model_type: 起動するモデルタイプ
         """
-        # Whisper起動時は全OllamaモデルをアンロードOllama models loaded
+        # Whisper起動時は全OllamaモデルをVRAMから解放
         if model_type == ModelType.WHISPER:
             self._unload_ollama_all()
-        # Tier1/Tier3起動時は何もしない（既に互換性チェック済み）
+
+        # Tier1/Tier3 起動時は互換性チェック済みなので追加アンロード不要
 
     def _unload_ollama_all(self) -> None:
         """
-        全Ollamaモデルをアンロード。
+        全Ollamaモデルを VRAM からアンロード。
 
-        Whisper起動前に使用。
+        Ollama の keep_alive=0 を指定することで、モデルをメモリから即時解放する。
+        空モデル名では動作しないため、既知のモデル名を個別にアンロードする。
+
+        Whisper起動前に呼び出す。
         """
-        try:
-            # Ollama generate を数トークンで呼び出してアンロード
-            ollama.generate(
-                model="",  # 空モデル指定でall unload
-                prompt="",
-                stream=False,
-            )
-        except Exception:
-            # アンロード失敗は警告レベル（Whisper動作を阻害しない）
-            pass
+        for model_type, model_name in _OLLAMA_MODEL_NAMES.items():
+            try:
+                # keep_alive=0: 推論後にモデルを即時アンロード
+                # prompt="" で最小コストで呼び出してアンロードをトリガー
+                ollama.generate(
+                    model=model_name,
+                    prompt="",
+                    keep_alive=0,   # 0 = 推論後即時 VRAM 解放
+                    options={"num_predict": 1},
+                )
+            except Exception:
+                # モデルが未ロードの場合など → 無視してOK
+                pass
 
     def get_current_model(self) -> ModelType:
-        """
-        現在実行中のモデルタイプを取得。
-
-        Returns:
-            ModelType: 現在のモデル（NONE = 未使用）
-        """
+        """現在実行中のモデルタイプを取得"""
         return self._current_model
 
     def get_lock_duration(self) -> Optional[float]:
-        """
-        ロック保有時間を取得（秒）。
-
-        Returns:
-            秒単位の保有時間、またはNone（ロック未取得時）
-        """
+        """ロック保有時間を取得（秒）"""
         if self._lock_time is None:
             return None
         return time.time() - self._lock_time
 
     def is_locked(self) -> bool:
-        """
-        ロックが取得されているかを確認。
-
-        Returns:
-            True if any model is holding the lock
-        """
+        """ロックが取得されているかを確認"""
         return self._current_model != ModelType.NONE
 
-    def __enter__(self) -> VRAMGuard:
+    def __enter__(self) -> "VRAMGuard":
         """Context manager support"""
         return self
 
@@ -202,7 +195,7 @@ class VRAMGuard:
                 pass
 
 
-# グローバルVRAMガードインスタンス
+# グローバルVRAMガードシングルトン
 _global_vram_guard: Optional[VRAMGuard] = None
 
 
@@ -210,8 +203,7 @@ def get_global_vram_guard() -> VRAMGuard:
     """
     グローバルVRAMガードシングルトンを取得。
 
-    Returns:
-        VRAMGuard: グローバルインスタンス
+    プロセス内で1インスタンスのみ保持し、全コンポーネントで共有する。
     """
     global _global_vram_guard
     if _global_vram_guard is None:

@@ -5,7 +5,14 @@ Tier1 推論エンジン（Phi-4:14B @ Ollama）
   - モデル: Phi-4:14B（Ollama ローカル動作、完全無料）
   - VRAM使用量: 約8.0GB（RTX3060Tiフル占有）
   - 待機時間計測: 10秒超過でTier2フォールバック判定
-  - タスクキュー: asyncio.Queue で直列化
+  - 直列化: asyncio.Semaphore(1) で同時1リクエストのみ実行
+
+【修正履歴】
+  旧実装: asyncio.Queue を使っていたが、Queue への put → 直接 Ollama 呼び出し →
+          Queue から get という無意味なループになっており、並列呼び出し時に
+          Ollama へ複数リクエストが同時に飛ぶ問題があった。
+  新実装: asyncio.Semaphore(1) で確実に1リクエストずつ直列化する。
+          待機時間もセマフォ取得までの時間として正確に計測できる。
 """
 
 from __future__ import annotations
@@ -37,24 +44,21 @@ class Tier1Engine:
     """
     Phi-4:14B @ Ollama による推論エンジン。
 
-    非同期キュー処理で複数リクエストを直列化。
-    待機時間を計測し、Tier2フォールバックの判定に使用。
+    asyncio.Semaphore(1) で複数リクエストを直列化。
+    セマフォ取得待ち時間を計測し、Tier2フォールバック判定に使用。
     """
 
-    MODEL_NAME = "phi4"
+    MODEL_NAME          = "phi4"
     DEFAULT_TEMPERATURE = 0.7
-    DEFAULT_MAX_TOKENS = 2048
+    DEFAULT_MAX_TOKENS  = 2048
 
-    def __init__(self, queue_maxsize: int = 100) -> None:
-        """
-        Initialize Tier1 Engine.
-
-        Args:
-            queue_maxsize: asyncio.Queue の最大サイズ
-        """
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
-        self.latest_wait_time = 0.0  # 最新の待機時間（秒）
-        self._current_latency = 0.0  # 現在の推論遅延
+    def __init__(self) -> None:
+        """Initialize Tier1 Engine."""
+        # Semaphore(1): 同時に1コルーチンのみ Ollama を呼び出せる
+        # Queue の代わりにセマフォを使うことで、並列呼び出し時の OOM を防ぐ
+        self._semaphore: asyncio.Semaphore = asyncio.Semaphore(1)
+        self.latest_wait_time: float = 0.0   # 最新のセマフォ待機時間（秒）
+        self._current_latency: float = 0.0   # 最新の Ollama 推論時間（秒）
 
     async def infer(
         self,
@@ -66,36 +70,55 @@ class Tier1Engine:
         """
         テキストベースの推論リクエストを実行。
 
+        セマフォにより同時1リクエストのみ Ollama へ送信される。
+        タイムアウトはセマフォ待機 + 推論時間の合計に適用。
+
         Args:
             prompt: 入力プロンプト
             temperature: サンプリング温度（0-2, 低いほど確定的）
             max_tokens: 最大生成トークン数
-            timeout_s: タイムアウト秒数
+            timeout_s: タイムアウト秒数（待機 + 推論の合計）
 
         Returns:
-            InferenceResult: 推論結果（テキスト、レイテンシ等）
+            InferenceResult: 推論結果
         """
-        start_time = time.time()
+        overall_start = time.time()
 
         try:
-            # キューに入れて実行を待つ
+            # セマフォ取得（タイムアウト付き）
+            # 他のリクエストが実行中なら、ここで待機する
             await asyncio.wait_for(
-                self.queue.put(("infer", prompt, temperature, max_tokens)),
-                timeout=timeout_s
+                self._semaphore.acquire(),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            return InferenceResult(
+                text="",
+                latency_ms=0.0,
+                error=f"Tier1 semaphore wait timeout after {timeout_s}s",
             )
 
-            # 待機時間を計測
-            queue_wait_time = time.time() - start_time
-            self.latest_wait_time = queue_wait_time
+        # セマフォ取得後: 待機時間を記録
+        wait_time = time.time() - overall_start
+        self.latest_wait_time = wait_time
 
-            # Ollama呼び出し
+        try:
+            # Ollama 呼び出し（残りタイムアウト = 全体 - 待機時間）
+            remaining_timeout = max(1.0, timeout_s - wait_time)
             infer_start = time.time()
-            response = ollama.generate(
-                model=self.MODEL_NAME,
-                prompt=prompt,
-                temperature=temperature,
-                num_predict=max_tokens,
-                stream=False,  # 非ストリーミング
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ollama.generate,
+                    model=self.MODEL_NAME,
+                    prompt=prompt,
+                    options={
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                    stream=False,
+                ),
+                timeout=remaining_timeout,
             )
 
             infer_time = time.time() - infer_start
@@ -115,7 +138,7 @@ class Tier1Engine:
             return InferenceResult(
                 text="",
                 latency_ms=0.0,
-                error=f"Tier1 timeout after {timeout_s}s",
+                error=f"Tier1 inference timeout after {timeout_s}s",
             )
         except Exception as e:
             return InferenceResult(
@@ -124,11 +147,8 @@ class Tier1Engine:
                 error=f"Tier1 inference error: {str(e)}",
             )
         finally:
-            # キューから取り出す
-            try:
-                self.queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
+            # 必ずセマフォを解放（例外が発生しても）
+            self._semaphore.release()
 
     async def chat(
         self,
@@ -149,27 +169,39 @@ class Tier1Engine:
         Returns:
             InferenceResult: 推論結果
         """
-        start_time = time.time()
+        overall_start = time.time()
 
         try:
-            # キューに入れて実行を待つ
             await asyncio.wait_for(
-                self.queue.put(("chat", messages, temperature, max_tokens)),
-                timeout=timeout_s
+                self._semaphore.acquire(),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            return InferenceResult(
+                text="",
+                latency_ms=0.0,
+                error=f"Tier1 chat semaphore wait timeout after {timeout_s}s",
             )
 
-            # 待機時間を計測
-            queue_wait_time = time.time() - start_time
-            self.latest_wait_time = queue_wait_time
+        wait_time = time.time() - overall_start
+        self.latest_wait_time = wait_time
 
-            # Ollama呼び出し（chat）
+        try:
+            remaining_timeout = max(1.0, timeout_s - wait_time)
             infer_start = time.time()
-            response = ollama.chat(
-                model=self.MODEL_NAME,
-                messages=messages,
-                temperature=temperature,
-                num_predict=max_tokens,
-                stream=False,
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ollama.chat,
+                    model=self.MODEL_NAME,
+                    messages=messages,
+                    options={
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                    stream=False,
+                ),
+                timeout=remaining_timeout,
             )
 
             infer_time = time.time() - infer_start
@@ -198,39 +230,27 @@ class Tier1Engine:
                 error=f"Tier1 chat error: {str(e)}",
             )
         finally:
-            try:
-                self.queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
+            self._semaphore.release()
 
     def extract_json(self, text: str) -> Optional[dict]:
         """
         推論結果テキストからJSON部分を抽出。
 
-        マークダウンコードブロック ```json ... ``` または
-        生JSON を検出。
-
-        Args:
-            text: 推論結果テキスト
-
-        Returns:
-            パースされたdict、またはNone（JSON不在時）
+        マークダウンコードブロック ```json ... ``` または生JSON を検出。
         """
         # ```json ... ``` パターン
         code_match = re.search(r'```(?:json)?\s*(\{.+?\})\s*```', text, re.DOTALL)
         if code_match:
-            json_str = code_match.group(1)
             try:
-                return json.loads(json_str)
+                return json.loads(code_match.group(1))
             except json.JSONDecodeError:
                 pass
 
         # 生JSON パターン（{...} を検出）
         json_match = re.search(r'(\{.+?\})', text, re.DOTALL)
         if json_match:
-            json_str = json_match.group(1)
             try:
-                return json.loads(json_str)
+                return json.loads(json_match.group(1))
             except json.JSONDecodeError:
                 pass
 
@@ -238,7 +258,7 @@ class Tier1Engine:
 
     def get_latest_wait_time(self) -> float:
         """
-        最新の待機時間を取得（Tier2フォールバック判定用）。
+        最新のセマフォ待機時間を取得（Tier2フォールバック判定用）。
 
         Returns:
             秒単位の待機時間
@@ -247,7 +267,7 @@ class Tier1Engine:
 
     def get_current_latency(self) -> float:
         """
-        最新の推論レイテンシを取得。
+        最新の Ollama 推論レイテンシを取得。
 
         Returns:
             秒単位のレイテンシ
@@ -256,13 +276,12 @@ class Tier1Engine:
 
     async def is_alive(self) -> bool:
         """
-        Ollama接続確認。
+        Ollama 接続確認。
 
         Returns:
-            True if Ollama is responsive, False otherwise
+            True if Ollama is responsive
         """
         try:
-            # 軽量なリクエストで疎通確認
             result = await self.infer("ping", max_tokens=10, timeout_s=5.0)
             return result.error is None
         except Exception:

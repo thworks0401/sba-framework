@@ -88,12 +88,12 @@ class APIUsageRepository:
     def _init_default_thresholds(self, cursor) -> None:
         """デフォルト API 閾値初期化"""
         defaults = [
-            ("gemini", 1500, 50000),               # Gemini: 日1500リクエスト, 月50000
-            ("youtube", 100, 10000),              # YouTube: 日100リクエスト
-            ("newsapi", 250, 20000),              # NewsAPI: 日250リクエスト
-            ("github", 500, 50000),               # GitHub: 日500リクエスト
-            ("stackoverflow", 300, 30000),        # StackOverflow: 日300リクエスト
-            ("huggingface", 200, 10000),          # HuggingFace: 日200リクエスト
+            ("gemini",        1500,  50000),   # Gemini: 日1500リクエスト, 月50000
+            ("youtube",        100,  10000),   # YouTube: 日100リクエスト
+            ("newsapi",        250,  20000),   # NewsAPI: 日250リクエスト
+            ("github",         500,  50000),   # GitHub: 日500リクエスト
+            ("stackoverflow",  300,  30000),   # StackOverflow: 日300リクエスト
+            ("huggingface",    200,  10000),   # HuggingFace: 日200リクエスト
         ]
 
         for api_name, daily, monthly in defaults:
@@ -102,6 +102,10 @@ class APIUsageRepository:
                 (api_name, daily_limit, monthly_limit)
                 VALUES (?, ?, ?)
             """, (api_name, daily, monthly))
+
+    # ======================================================================
+    # 使用量カウント
+    # ======================================================================
 
     def increment_usage(
         self,
@@ -135,6 +139,10 @@ class APIUsageRepository:
 
         conn.commit()
         conn.close()
+
+    # ======================================================================
+    # 使用量取得
+    # ======================================================================
 
     def get_today_usage(self, api_name: str) -> dict:
         """今日のAPI使用量取得"""
@@ -190,6 +198,99 @@ class APIUsageRepository:
             "total_unit": row[2] or 0,
         }
 
+    # ======================================================================
+    # 残量計算（Tier2Engine から呼ばれる）
+    # ======================================================================
+
+    def get_remaining_tokens(self, api_name: str) -> Optional[int]:
+        """
+        日次残量トークン数を返す（daily_limit - 今日の使用済みトークン）。
+
+        Tier2Engine.infer() および get_remaining_quota() から呼ばれる。
+
+        Returns:
+            残量トークン数。daily_limit 未設定の場合は None（無制限扱い）。
+        """
+        threshold = self.get_threshold(api_name)
+        if not threshold or threshold.get("daily_limit") is None:
+            # 閾値未設定 = 無制限扱い（呼び出し側は None を「制限なし」と解釈する）
+            return None
+
+        today = self.get_today_usage(api_name)
+        used = today.get("token_count", 0)
+        daily_limit = threshold["daily_limit"]
+
+        return max(0, daily_limit - used)
+
+    def get_remaining_requests(self, api_name: str) -> Optional[int]:
+        """
+        日次残量リクエスト数を返す（daily_limit - 今日の使用済みリクエスト）。
+
+        token_count ではなく req_count ベースで確認したい API 用。
+
+        Returns:
+            残量リクエスト数。daily_limit 未設定の場合は None。
+        """
+        threshold = self.get_threshold(api_name)
+        if not threshold or threshold.get("daily_limit") is None:
+            return None
+
+        today = self.get_today_usage(api_name)
+        used = today.get("req_count", 0)
+        daily_limit = threshold["daily_limit"]
+
+        return max(0, daily_limit - used)
+
+    def get_usage_rate(self, api_name: str) -> float:
+        """
+        今日の使用率を返す（0.0〜1.0）。
+
+        WARNING / THROTTLE / STOP 判定の共通ロジックとして使用。
+
+        Returns:
+            使用率（daily_limit 未設定の場合は 0.0）
+        """
+        threshold = self.get_threshold(api_name)
+        if not threshold or not threshold.get("daily_limit"):
+            return 0.0
+
+        today = self.get_today_usage(api_name)
+        used = today.get("token_count", 0)
+        daily_limit = threshold["daily_limit"]
+
+        return min(1.0, used / daily_limit)
+
+    def get_stop_level(self, api_name: str) -> str:
+        """
+        現在の使用率に基づく停止レベルを返す。
+
+        補足設計書 §2.3: WARNING(70%) / THROTTLE(85%) / STOP(95%) の3段階閾値。
+
+        Returns:
+            "ok" | "warning" | "throttle" | "stop"
+        """
+        threshold = self.get_threshold(api_name)
+        if not threshold:
+            return "ok"
+
+        rate = self.get_usage_rate(api_name)
+        warn_pct     = threshold.get("warn_pct",     0.70)
+        throttle_pct = threshold.get("throttle_pct", 0.85)
+        stop_pct     = threshold.get("stop_pct",     0.95)
+
+        if rate >= stop_pct:
+            return "stop"
+        elif rate >= throttle_pct:
+            return "throttle"
+        elif rate >= warn_pct:
+            return "warning"
+        else:
+            return "ok"
+
+    # ======================================================================
+    # API 停止状態管理
+    # ======================================================================
+
     def set_api_stopped(
         self,
         api_name: str,
@@ -244,6 +345,10 @@ class APIUsageRepository:
 
         return row_dict
 
+    # ======================================================================
+    # 閾値管理
+    # ======================================================================
+
     def get_threshold(self, api_name: str) -> dict | None:
         """API 閾値取得"""
         conn = self._get_conn()
@@ -257,6 +362,10 @@ class APIUsageRepository:
             return None
 
         return dict(row)
+
+    # ======================================================================
+    # ダッシュボード
+    # ======================================================================
 
     def get_all_api_status(self) -> dict:
         """全 API のステータスダッシュボード"""

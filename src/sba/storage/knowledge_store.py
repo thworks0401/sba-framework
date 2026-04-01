@@ -4,8 +4,13 @@ KnowledgeStore — Qdrant + Kuzu + SQLite 統合インターフェース
 設計根拠（補足設計書 §2.5）:
   - 3ストア（Vector + Graph + Relational）の一括操作
   - store_chunk: アトミックな書き込み
-  - query_hybrid: FAISS + グラフ統合検索
+  - query_hybrid: ベクトル + グラフ統合検索
   - mark_deprecated: チャンク非推奨化
+
+【修正履歴】
+  mark_deprecated(): 旧実装は get_timeline_by_subskill("") で全件スキャンしていた。
+  Brain 成長後は数千〜数万エントリになる可能性があり、パフォーマンス問題になるため、
+  get_timeline_by_kg_node(chunk_id) による直接検索に変更。
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ class KnowledgeStore:
     """
     Knowledge Base 統合インターフェース。
 
-    Qdrant（ベクトル検索）+ Kuzu（グラフ構造）+ SQLite（ライムライン）
+    Qdrant（ベクトル検索）+ Kuzu（グラフ構造）+ SQLite（タイムライン）
     を統合的に操作。
 
     チャンク追加時は 3つのストア全てにアトミックに書き込む設計。
@@ -43,19 +48,18 @@ class KnowledgeStore:
         Initialize Knowledge Base.
 
         Args:
-            brain_package_path: Brain Package ディレクトリパス（[active]/ など）
+            brain_package_path: Brain Package ディレクトリパス
             brain_id: Brain UUID
         """
         self.brain_package_path = Path(brain_package_path)
         self.brain_id = brain_id
 
-        # ストアの初期化
-        vector_index_path = self.brain_package_path / "vector_index"
-        knowledge_graph_path = self.brain_package_path / "knowledge_graph"
+        vector_index_path     = self.brain_package_path / "vector_index"
+        knowledge_graph_path  = self.brain_package_path / "knowledge_graph"
         learning_timeline_path = self.brain_package_path / "learning_timeline.db"
 
-        self.vector_store = QdrantVectorStore(str(vector_index_path), brain_id)
-        self.graph_store = KuzuGraphStore(str(knowledge_graph_path), brain_id)
+        self.vector_store  = QdrantVectorStore(str(vector_index_path), brain_id)
+        self.graph_store   = KuzuGraphStore(str(knowledge_graph_path), brain_id)
         self.timeline_repo = TimelineRepository(str(learning_timeline_path))
 
     # ======================================================================
@@ -75,25 +79,18 @@ class KnowledgeStore:
         """
         チャンクを 3つのストア全てに統合的に保存。
 
-        コンテンツハッシュによる重複チェック + ベクトル類似度チェック併用。
-
-        Args:
-            text: チャンク本文
-            primary_subskill: 主 SubSkill ID
-            source_type: Web / PDF / Video / API / Experiment
-            source_url: 元 URL
-            trust_score: 信頼スコア（0.0-1.0）
-            summary: LLM 生成サマリ（オプション）
-            secondary_subskills: 副 SubSkill ID リスト
+        コンテンツハッシュ + ベクトル類似度の二段階重複チェック付き。
 
         Returns:
             {
-                "chunk_id": str,
-                "qdrant_ids": [str, ...],
+                "chunk_id": str | None,
+                "qdrant_ids": list[str],
+                "timeline_id": str,
                 "duplicate_detected": bool,
+                "reason": str,  # 重複時のみ
             }
         """
-        # コンテンツハッシュで完全重複チェック
+        # --- Step 1: コンテンツハッシュで完全重複チェック ---
         content_hash = hashlib.sha256(text.encode()).hexdigest()
         existing = self.timeline_repo.check_duplicate_by_hash(content_hash)
 
@@ -105,7 +102,7 @@ class KnowledgeStore:
                 "reason": f"Content hash match: {existing}",
             }
 
-        # ベクトル類似度で重複チェック
+        # --- Step 2: ベクトル類似度で重複チェック（コサイン類似度 > 0.92）---
         duplicate_check = self.vector_store.duplicate_check(text, primary_subskill)
 
         if duplicate_check:
@@ -116,9 +113,9 @@ class KnowledgeStore:
                 "reason": f"Vector similarity > 0.92: {duplicate_check['chunk_id']}",
             }
 
-        # ── 重複なし → 3ストアに書き込み ──
+        # --- Step 3: 重複なし → 3ストアにアトミック書き込み ---
 
-        # 1. Kuzu にノード追加
+        # 3-1. Kuzu にノード追加
         chunk_id = self.graph_store.add_knowledge_chunk(
             text=text,
             trust_score=trust_score,
@@ -128,7 +125,7 @@ class KnowledgeStore:
             summary=summary,
         )
 
-        # 2. Qdrant にベクトル追加
+        # 3-2. Qdrant にベクトル追加
         qdrant_ids = self.vector_store.add_chunks(
             chunks=[{"id": chunk_id, "text": text, "trust_score": trust_score}],
             subskill_id=primary_subskill,
@@ -136,13 +133,11 @@ class KnowledgeStore:
             source_url=source_url,
         )
 
-        # 3. Kuzu エッジ: BELONGS_TO_PRIMARY
+        # 3-3. Kuzu に Qdrant ID を記録
         if qdrant_ids:
-            qdrant_id = qdrant_ids[0]
-            # Qdrant ID を Kuzu に記録
-            self.graph_store.update_knowledge_chunk(chunk_id, qdrant_id=qdrant_id)
+            self.graph_store.update_knowledge_chunk(chunk_id, qdrant_id=qdrant_ids[0])
 
-        # 4. Secondary SubSkill リンク
+        # 3-4. Secondary SubSkill リンク
         if secondary_subskills:
             for sec_skill in secondary_subskills:
                 self.graph_store.add_related_to_secondary(
@@ -151,7 +146,7 @@ class KnowledgeStore:
                     relevance=0.5,
                 )
 
-        # 5. Timeline に記録
+        # 3-5. Timeline に記録
         timeline_id = self.timeline_repo.insert_timeline(
             brain_id=self.brain_id,
             source_type=source_type,
@@ -181,7 +176,7 @@ class KnowledgeStore:
         limit: int = 10,
     ) -> list[dict]:
         """
-        ハイブリッド検索: ベクトル類似度 + グラフ関連性.
+        ハイブリッド検索: ベクトル類似度 + グラフ関連性。
 
         Returns:
             [
@@ -196,7 +191,6 @@ class KnowledgeStore:
                 ...
             ]
         """
-        # ベクトル検索
         vector_results = self.vector_store.search(
             query_text=query_text,
             subskill_id=subskill_id,
@@ -206,23 +200,19 @@ class KnowledgeStore:
         results = []
         for v_result in vector_results:
             chunk_id = v_result["chunk_id"]
+            related  = self.graph_store.get_related_chunks(chunk_id)
 
-            # Kuzu でグラフ情報取得
-            related = self.graph_store.get_related_chunks(chunk_id)
-
-            result_item = {
-                "chunk_id": chunk_id,
-                "qdrant_id": v_result["qdrant_id"],
-                "text": v_result["text"],
-                "score": v_result["score"],
-                "trust_score": v_result["trust_score"],
-                "source_type": v_result["source_type"],
-                "source_url": v_result["source_url"],
-                "primary_subskill": related.get("primary_subskill"),
+            results.append({
+                "chunk_id":          chunk_id,
+                "qdrant_id":         v_result["qdrant_id"],
+                "text":              v_result["text"],
+                "score":             v_result["score"],
+                "trust_score":       v_result["trust_score"],
+                "source_type":       v_result["source_type"],
+                "source_url":        v_result["source_url"],
+                "primary_subskill":  related.get("primary_subskill"),
                 "related_subskills": related.get("secondary_subskills", []),
-            }
-
-            results.append(result_item)
+            })
 
         return results
 
@@ -235,7 +225,7 @@ class KnowledgeStore:
         self.graph_store.add_subskill_node(subskill_id, display_name)
 
     def update_subskill_density(self, subskill_id: str, density_score: float) -> None:
-        """SubSkill density_score 更新（学習進度指標）"""
+        """SubSkill density_score 更新"""
         self.graph_store.update_subskill_density(subskill_id, density_score)
 
     # ======================================================================
@@ -243,15 +233,21 @@ class KnowledgeStore:
     # ======================================================================
 
     def mark_deprecated(self, chunk_id: str, reason: str = "") -> None:
-        """チャンクを deprecated マーク"""
+        """
+        チャンクを deprecated マーク。
+
+        Kuzu 上のフラグ + Timeline の freshness を 0.0 に更新。
+
+        【修正】旧実装: get_timeline_by_subskill("") で全件スキャン
+               新実装: get_timeline_by_kg_node(chunk_id) で直接検索
+        """
+        # Kuzu のフラグを立てる
         self.graph_store.mark_deprecated(chunk_id)
 
-        # Timeline も更新
-        timeline_entries = self.timeline_repo.get_timeline_by_subskill("")  # 簡略
-        for entry in timeline_entries:
-            if chunk_id in entry.get("kg_node_ids", []):
-                self.timeline_repo.update_freshness(entry["id"], 0.0)
-                break
+        # Timeline の freshness を 0.0 に更新（outdated フラグも立つ）
+        entry = self.timeline_repo.get_timeline_by_kg_node(chunk_id)
+        if entry:
+            self.timeline_repo.update_freshness(entry["id"], 0.0)
 
     def mark_requires_review(self, chunk_id: str, reason: str = "") -> None:
         """チャンクに human_review フラグ付与"""
@@ -263,12 +259,8 @@ class KnowledgeStore:
         if not chunk:
             return None
 
-        # グラフ情報付加
         related = self.graph_store.get_related_chunks(chunk_id)
-        chunk.update({
-            "related_subskills": related.get("secondary_subskills", []),
-        })
-
+        chunk.update({"related_subskills": related.get("secondary_subskills", [])})
         return chunk
 
     def get_chunks_by_subskill(self, subskill_id: str) -> list[dict]:
@@ -285,16 +277,18 @@ class KnowledgeStore:
         trust_score_threshold: float = 0.7,
     ) -> Optional[str]:
         """
-        新規チャンクと既存チャンク間の矛盾検出.
+        新規チャンクと既存チャンク間の矛盾検出。
 
-        補足設計書 A-4: 矛盾検出 → CONTRADICTS エッジ付与
+        TODO (Phase 4 タスク 4-8):
+            現実装は未実装スタブ（return None）。
+            knowledge_integrator.py 実装時に Tier1 LLM による
+            矛盾判定ロジックをここに追加する。
+            補足設計書 A-4: 矛盾検出 → CONTRADICTS エッジ付与。
 
         Returns:
-            矛盾が見つかった既存 chunk_id or None
+            矛盾が見つかった既存 chunk_id、見つからなければ None
         """
-        # 簡略実装: グラフクエリで矛盾候補を異なる信頼スコアで検出
-        # 本実装では LLM に判定させるべき項目
-        return None
+        return None  # TODO: Phase 4 タスク 4-8 で実装
 
     def add_contradiction_edge(self, chunk_a_id: str, chunk_b_id: str) -> None:
         """矛盾ノード間にエッジ付与"""
@@ -311,14 +305,10 @@ class KnowledgeStore:
 
     def get_knowledge_base_stats(self) -> dict:
         """Knowledge Base 統計"""
-        vector_stats = self.vector_store.get_collection_stats()
-        graph_stats = self.graph_store.get_graph_stats()
-        timeline_stats = self.timeline_repo.get_stats(self.brain_id)
-
         return {
-            "vector_store": vector_stats,
-            "graph_store": graph_stats,
-            "timeline": timeline_stats,
+            "vector_store": self.vector_store.get_collection_stats(),
+            "graph_store":  self.graph_store.get_graph_stats(),
+            "timeline":     self.timeline_repo.get_stats(self.brain_id),
         }
 
     def get_subskill_overview(self) -> list[dict]:
@@ -328,8 +318,8 @@ class KnowledgeStore:
         for skill in subskills:
             chunks = self.get_chunks_by_subskill(skill["id"])
             skill.update({
-                "chunk_count": len(chunks),
-                "avg_trust_score": sum(c["trust_score"] for c in chunks) / max(len(chunks), 1),
+                "chunk_count":      len(chunks),
+                "avg_trust_score":  sum(c["trust_score"] for c in chunks) / max(len(chunks), 1),
             })
 
         return subskills
