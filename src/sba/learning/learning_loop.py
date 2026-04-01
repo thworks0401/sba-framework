@@ -29,6 +29,7 @@ from .knowledge_integrator import KnowledgeIntegrator
 from .resource_finder import ResourceFinder
 from .self_evaluator import SelfEvaluator
 from ..subskill.classifier import SubSkillClassifier
+from ..experiment.experiment_engine import ExperimentEngine
 
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class LearningLoop:
         classifier:         Optional[SubSkillClassifier] = None,
         integrator:         Optional[KnowledgeIntegrator] = None,
         evaluator:          Optional[SelfEvaluator]      = None,
+        experiment_engine:  Optional[ExperimentEngine]   = None,
     ) -> None:
         """
         Initialize LearningLoop.
@@ -91,17 +93,19 @@ class LearningLoop:
             brain_name:        Brain名
             active_brain_path: Brain ディレクトリパス
             各 Component インスタンス（None の場合は後から設定）
+            experiment_engine: ExperimentEngine（Phase 5, オプション）
         """
         self.brain_id          = brain_id
         self.brain_name        = brain_name
         self.active_brain_path = Path(active_brain_path)
 
         # Components
-        self.gap_detector   = gap_detector
-        self.resource_finder = resource_finder
-        self.classifier     = classifier
-        self.integrator     = integrator
-        self.evaluator      = evaluator
+        self.gap_detector      = gap_detector
+        self.resource_finder   = resource_finder
+        self.classifier        = classifier
+        self.integrator        = integrator
+        self.evaluator         = evaluator
+        self.experiment_engine = experiment_engine
 
         # Configuration
         self.loop_interval = self.DEFAULT_LOOP_INTERVAL_SECONDS
@@ -195,8 +199,32 @@ class LearningLoop:
 
             # ------------------------------------------------------------------
             # Step4: 自己実験
-            # 省略: Self-Experimentation Engine（Phase 5）へ委譲
+            # 弱点SubSkillに対して仮説→実験設計→実験実行（Phase 5）
             # ------------------------------------------------------------------
+            if self.experiment_engine and result.step1_gap:
+                try:
+                    weak_subskill = result.step1_gap["target_subskill"]
+                    gap_desc = result.step1_gap["suggested_query"]
+                    current_score = result.step1_gap.get("current_score", 0.0)
+
+                    # 仮説生成 + 実験設計
+                    plan = await self.experiment_engine.design_experiment(
+                        weak_subskill, gap_desc, current_score
+                    )
+                    if plan:
+                        result.logs.append(
+                            f"Step4: experiment designed ({plan.experiment_type.value})"
+                        )
+                        logger.info(f"Experiment plan created: {plan.experiment_id}")
+                    else:
+                        result.logs.append("Step4: experiment design skipped")
+                        logger.warning("Failed to design experiment")
+                except Exception as e:
+                    logger.error(f"Step4 experiment design failed: {str(e)}")
+                    result.logs.append(f"Step4 experiment design error: {str(e)}")
+            else:
+                result.logs.append("Step4: experiment engine not available")
+
 
             # ------------------------------------------------------------------
             # Step5: 知識統合・矛盾検出
