@@ -1,8 +1,32 @@
-﻿project_root: C:\TH_Works\SBA
+# SBA Framework 設定ファイル
+# 補足設計書 §4.2 / §3.1 / §6.3 に基づく確定版
+# このファイルを編集して環境に合わせてください
+
+project_root: C:\TH_Works\SBA
+
 paths:
-  brain_bank: C:\TH_Works\SBA\brain_bank
-  logs: C:\TH_Works\SBA\logs
+  brain_bank:     C:\TH_Works\SBA\brain_bank
+  active:         C:\TH_Works\SBA\brain_bank\[active]
+  blank_template: C:\TH_Works\SBA\brain_bank\blank_template
+  exports:        C:\TH_Works\SBA\exports
+  logs:           C:\TH_Works\SBA\logs
+  data:           C:\TH_Works\SBA\data
+  scripts:        C:\TH_Works\SBA\scripts
+
 api_keys:
-  gemini: \
+  gemini:  ""   # Gemini 2.5 Flash API Key（Tier2用）
+  youtube: ""   # YouTube Data API v3 Key（動画ソース検索用）
+  github:  ""   # GitHub Personal Access Token（コードソース用）
+
 thresholds:
-  default: 0.5
+  default:             0.5   # 汎用閾値
+  similarity_dedup:    0.92  # 重複チェック閾値（補足設計書§2.1）
+  subskill_weak:       0.6   # 弱点SubSkill判定閾値
+  trust_score_default: 0.7   # 新規チャンクのデフォルト信頼スコア
+
+backup:
+  enabled:       true
+  destination:   D:\SBA_Backup   # 外付けSSD or NAS に変更可
+  schedule_cron: "0 4 * * *"     # 毎日 AM 4:00
+  keep_versions: 7
+  include_active: true

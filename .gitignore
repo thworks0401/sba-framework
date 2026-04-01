@@ -1,38 +1,48 @@
-﻿# Python
+# ===== Python =====
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pdb
+*.egg-info/
+dist/
+build/
+*.egg
 
-# Virtual env
+# ===== 仮想環境 =====
 .venv/
+venv/
+env/
 
-# VSCode
+# ===== IDE / Editor =====
 .vscode/
-
-# Logs
-logs/
-
-# Brain data (本番環境で適宜調整)
-brain_bank/
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Virtual env
-.venv/
-
-# VSCode
-.vscode/
-
-# Logs
-logs/
-
-# Brain data (本番環境で適宜調整)
-brain_bank/
-
-config/.env
-.env
+.idea/
+*.swp
+*.swo
 .aider*
+
+# ===== 環境変数・シークレット =====
+.env
+config/.env
+*.secret
+
+# ===== ログ =====
+logs/
+*.log
+
+# ===== Brain データ =====
+brain_bank/
+
+# ===== SQLite / DB ファイル =====
+data/*.db
+data/*.sqlite
+*.db
+*.sqlite3
+
+# ===== エクスポート出力 =====
+exports/
+
+# ===== OS 生成ファイル =====
+.DS_Store
+Thumbs.db
+desktop.ini
