@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pytest tests/ --tb=short -q)",
+      "Bash(pip show:*)",
+      "Bash(python -c \"import apscheduler; print\\(apscheduler.__version__\\)\")"
+    ]
+  }
+}

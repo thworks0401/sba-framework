@@ -221,42 +221,37 @@ class ResourceFinder:
         Returns:
             ResourceCandidate のリスト
         """
-        # TODO: Phase 4-5: Implement actual resource search with timeout
-        # Currently returns empty to prevent hanging on network requests
-        # The Fetcher integration (WEB, ARXIV, YOUTUBE, GITHUB, etc.) is in progress
-        return []
-        
-        # import asyncio
-        # 
-        # source_priority = self._get_source_priority(is_tech_brain)
-        # quota_status    = self._check_api_quota()
-        # candidates: List[ResourceCandidate] = []
-        #
-        # for source_type in source_priority:
-        #     if len(candidates) >= max_candidates:
-        #         break
-        #
-        #     if not self._should_use_source(source_type, quota_status):
-        #         continue
-        #
-        #     try:
-        #         # Add timeout per source to prevent hanging
-        #         results = await asyncio.wait_for(
-        #             self._search_by_source(source_type, query, subskill_id),
-        #             timeout=3.0,  # 3 second timeout per source
-        #         )
-        #         for result in results:
-        #             if not self._has_seen_url(result.url):
-        #                 candidates.append(result)
-        #                 if len(candidates) >= max_candidates:
-        #                     break
-        #     except asyncio.TimeoutError:
-        #         # Skip this source on timeout
-        #         pass
-        #     except Exception:
-        #         pass  # ソース別エラーは無視して次へ
-        #
-        # return candidates
+        source_priority = self._get_source_priority(is_tech_brain)
+        quota_status    = self._check_api_quota()
+        candidates: List[ResourceCandidate] = []
+
+        for source_type in source_priority:
+            if len(candidates) >= max_candidates:
+                break
+
+            if not self._should_use_source(source_type, quota_status):
+                continue
+
+            try:
+                # Add timeout per source to prevent hanging on network requests
+                results = await asyncio.wait_for(
+                    self._search_by_source(source_type, query, subskill_id),
+                    timeout=5.0,  # 5 second timeout per source
+                )
+                for result in results:
+                    if not self._has_seen_url(result.url):
+                        candidates.append(result)
+                        if len(candidates) >= max_candidates:
+                            break
+            except asyncio.TimeoutError:
+                # Skip this source on timeout (safe degradation)
+                continue
+            except Exception as e:
+                # Log but don't fail on individual source errors
+                continue
+
+        # Rank candidates by trust score and priority
+        return self.rank_candidates(candidates)
 
     def _should_use_source(
         self, source_type: SourceType, quota_status: Dict[str, bool]
