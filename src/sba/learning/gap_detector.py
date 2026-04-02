@@ -83,7 +83,15 @@ class GapDetector:
         try:
             with open(self_eval_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # self_eval.json は scores: {subskill_id: score} の構造を想定
+            
+            # Pydantic v2 SelfEval model: subskills: {subskill_id: {density, weak, priority}}
+            subskills = data.get("subskills", {})
+            if subskills:
+                # Extract density from SubSkillScore objects
+                return {skill_id: score.get("density", 0.0) if isinstance(score, dict) else score 
+                        for skill_id, score in subskills.items()}
+            
+            # Legacy fallback: scores: {subskill_id: score}
             return data.get("scores", {})
         except Exception:
             return {}
@@ -123,8 +131,30 @@ class GapDetector:
         """
         # スコアを読み込み
         scores = self.load_self_evaluation(self_eval_path)
+        
+        # Empty scores: Brainが初期化直後の場合、manifestから最初のSubSkillを選択
         if not scores:
-            raise GapDetectionError("self_eval.json が読み込めません")
+            subskill_list = subskill_manifest.get("subskills", [])
+            if subskill_list:
+                default_subskill = subskill_list[0]
+                return KnowledgeGapResult(
+                    target_subskill=default_subskill.get("id", "learning"),
+                    current_score=0.0,
+                    gap_severity="critical",
+                    gap_description=f"新規 Brain: {default_subskill.get('display_name', 'Learning')} から開始",
+                    suggested_query=f"{default_subskill.get('description', 'learning')} の基礎",
+                    priority_reasons=["Blank Brain - High priority learning required"]
+                )
+            else:
+                # No manifest either, use fallback
+                return KnowledgeGapResult(
+                    target_subskill="learning",
+                    current_score=0.0,
+                    gap_severity="critical",
+                    gap_description="新規 Brain: 初期学習フェーズ",
+                    suggested_query="基本的な概念と理論",
+                    priority_reasons=["Blank Brain - learning from scratch"]
+                )
 
         # SubSkillをスコアでソート（昇順 = 弱い順）
         sorted_subskills = sorted(scores.items(), key=lambda x: x[1])
@@ -177,12 +207,23 @@ class GapDetector:
         # 学習履歴を更新
         self.learning_history[subskill_id] = datetime.now()
 
+        # シンプルな学習クエリを生成（Tier1での複雑な処理は避ける）
+        simple_query = self._generate_simple_query(subskill_id, subskill_desc, score)
+
+        priority_reasons = []
+        if best_candidate["is_weak"]:
+            priority_reasons.append("弱点フラグが立っている（スコア≤0.6）")
+        if not best_candidate["in_cooldown"]:
+            priority_reasons.append("クールダウン期間外")
+        if best_candidate["severity"] in ["critical", "high"]:
+            priority_reasons.append(f"ギャップ深刻度: {best_candidate['severity']}")
+
         return KnowledgeGapResult(
             target_subskill=subskill_id,
             current_score=score,
             gap_severity=severity,
             gap_description=subskill_desc or subskill_id,
-            suggested_query=query,
+            suggested_query=simple_query,
             priority_reasons=priority_reasons,
         )
 
@@ -196,14 +237,14 @@ class GapDetector:
                 return sk.get("description", "")
         return ""
 
-    async def _generate_learning_query(
+    def _generate_simple_query(
         self,
         subskill_id: str,
         subskill_description: str,
         current_score: float,
     ) -> str:
         """
-        Tier1を使って学習クエリを生成。
+        Simple learning query generation without Tier1 (avoids hang).
 
         Args:
             subskill_id: SubSkill ID
@@ -213,38 +254,24 @@ class GapDetector:
         Returns:
             学習クエリ文字列
         """
-        prompt = f"""あなたは {self.brain_name} ブレインの学習計画立案者である。
-
-対象SubSkill: {subskill_id}
-説明: {subskill_description}
-現在のスコア: {current_score:.1%}
-
-このSubSkillの現在のスコアが低い（{current_score:.1%}）ため、補完学習が必要である。
-
-以下のクエリで外部リソースを検索し、最適な学習教材を探索する。
-
-【生成ルール】
-1. 外部リソース（Web記事・論文・動画など）を検索するための、具体的で実行的なクエリを生成せよ。
-2. SubSkillの説明と現在のスコアから、不足している知識領域を推測し、それを補う情報源を想定して検索クエリを作成せよ。
-3. 日本語で、検索エンジンに直接投げられるような形式で生成せよ。
-4. 長さは 50～150 文字程度とし、複合検索キーワードを含めよ。
-
-【出力形式】
-生成した学習クエリのみを、引用符のない平文で返せ。"""
-
-        result = await self.tier1_engine.infer(
-            prompt=prompt,
-            temperature=0.5,
-            max_tokens=200,
-            timeout_s=15.0,
-        )
-
-        if result.error:
-            # フォールバック：単純なクエリを返す
-            return f"{self.brain_name} {subskill_id} 学習"
-
-        query_text = result.text.strip().strip('"\'')
-        return query_text if query_text else f"{self.brain_name} {subskill_id}"
+        # Build a simple, actionable learning query
+        base_query = f"{self.brain_name} {subskill_id}"
+        
+        if current_score < 0.3:
+            # Critical gap: focus on fundamentals
+            if subskill_description:
+                return f"{subskill_description} 基礎 入門".strip()
+            return f"{base_query} 基礎"
+        elif current_score < 0.6:
+            # Significant gap: focus on key concepts
+            if subskill_description:
+                return f"{subskill_description} 重要 概念".strip()
+            return f"{base_query} 概念"
+        else:
+            # Minor gap: advanced topics
+            if subskill_description:
+                return f"{subskill_description} 応用 実装".strip()
+            return f"{base_query} 応用"
 
     def get_priority_queue(
         self,
