@@ -87,15 +87,45 @@ for _ap in [
     if _ap not in sys.modules:
         _stub(_ap)
 
+if "apscheduler.schedulers.background" in sys.modules:
+    sys.modules["apscheduler.schedulers.background"].BackgroundScheduler = MagicMock()
+
+if "apscheduler.jobstores.sqlalchemy" in sys.modules:
+    sys.modules["apscheduler.jobstores.sqlalchemy"].SQLAlchemyJobStore = MagicMock()
+
+if "apscheduler.triggers.cron" in sys.modules:
+    sys.modules["apscheduler.triggers.cron"].CronTrigger = MagicMock()
+
+if "apscheduler.triggers.interval" in sys.modules:
+    sys.modules["apscheduler.triggers.interval"].IntervalTrigger = MagicMock()
+
+if "apscheduler.job" in sys.modules:
+    sys.modules["apscheduler.job"].Job = MagicMock()
+
 # loguru
 if "loguru" not in sys.modules:
     _lg = _stub("loguru")
     _lg.logger = MagicMock()
 
+# faster_whisper
+if "faster_whisper" not in sys.modules:
+    _fw = _stub("faster_whisper")
+    _fw.WhisperModel = MagicMock()
+
+# playwright
+for _pw in ["playwright", "playwright.async_api"]:
+    if _pw not in sys.modules:
+        _stub(_pw)
+
+if "playwright.async_api" in sys.modules:
+    _pwa = sys.modules["playwright.async_api"]
+    _pwa.async_playwright = MagicMock()
+    _pwa.Browser = MagicMock()
+    _pwa.Page = MagicMock()
+
 # その他の外部ライブラリ
-for _m in ["plyer", "feedparser", "aiohttp", "yt_dlp", "faster_whisper",
-           "duckduckgo_search", "playwright", "playwright.async_api",
-           "pdfminer", "pdfminer.high_level", "pdfminer.layout"]:
+for _m in ["plyer", "feedparser", "aiohttp", "yt_dlp",
+           "duckduckgo_search", "pdfminer", "pdfminer.high_level", "pdfminer.layout"]:
     if _m not in sys.modules:
         _stub(_m)
 
