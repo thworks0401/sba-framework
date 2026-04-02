@@ -208,7 +208,7 @@ class KuzuGraphStore:
             {"id": chunk_id},
         )
 
-        rows = result.fetch_all()
+        rows = result.get_all()
         if not rows:
             return None
 
@@ -235,7 +235,7 @@ class KuzuGraphStore:
 
         for key, value in kwargs.items():
             if key in ["text", "summary", "trust_score", "source_url", "source_type",
-                       "is_deprecated", "is_contradicted", "requires_human_review"]:
+                       "is_deprecated", "is_contradicted", "requires_human_review", "qdrant_id"]:
                 updates.append(f"SET n.{key} = ${key}")
                 params[key] = value
 
@@ -268,7 +268,7 @@ class KuzuGraphStore:
         )
 
         chunks = []
-        for row in result.fetch_all():
+        for row in result.get_all():
             node = row[0]
             chunks.append({
                 "id": node["id"],
@@ -356,26 +356,39 @@ class KuzuGraphStore:
 
     def get_related_chunks(self, chunk_id: str) -> dict:
         """チャンクの関連チャンク・SubSkill を取得"""
-        result = self.conn.execute(
-            """
-            MATCH (chunk:KnowledgeChunk {id: $id})
-            OPTIONAL MATCH (chunk)-[:BELONGS_TO_PRIMARY]->(primary:SubSkillNode)
-            OPTIONAL MATCH (chunk)-[:RELATED_TO_SECONDARY]->(secondary:SubSkillNode)
-            RETURN chunk, primary, collect(secondary) as secondaries
-            """,
+        chunk_rows = self.conn.execute(
+            "MATCH (chunk:KnowledgeChunk {id: $id}) RETURN chunk",
             {"id": chunk_id},
-        )
+        ).get_all()
 
-        rows = result.fetch_all()
+        rows = chunk_rows
         if not rows:
             return {}
 
-        row = rows[0]
-        chunk, primary, secondaries = row[0], row[1], row[2]
+        chunk = rows[0][0]
+
+        primary_rows = self.conn.execute(
+            """
+            MATCH (chunk:KnowledgeChunk {id: $id})-[:BELONGS_TO_PRIMARY]->(primary_skill:SubSkillNode)
+            RETURN primary_skill
+            LIMIT 1
+            """,
+            {"id": chunk_id},
+        ).get_all()
+        primary_skill = primary_rows[0][0] if primary_rows else None
+
+        secondary_rows = self.conn.execute(
+            """
+            MATCH (chunk:KnowledgeChunk {id: $id})-[:RELATED_TO_SECONDARY]->(secondary_skill:SubSkillNode)
+            RETURN secondary_skill
+            """,
+            {"id": chunk_id},
+        ).get_all()
+        secondaries = [row[0] for row in secondary_rows if row and row[0]]
 
         return {
             "chunk_id": chunk["id"],
-            "primary_subskill": primary["id"] if primary else None,
+            "primary_subskill": primary_skill["id"] if primary_skill else None,
             "secondary_subskills": [s["id"] for s in secondaries if s],
         }
 
@@ -398,7 +411,7 @@ class KuzuGraphStore:
         result = self.conn.execute("MATCH (n:SubSkillNode) RETURN n")
 
         subskills = []
-        for row in result.fetch_all():
+        for row in result.get_all():
             node = row[0]
             subskills.append({
                 "id": node["id"],
@@ -412,11 +425,11 @@ class KuzuGraphStore:
         """グラフ統計情報"""
         chunk_count = self.conn.execute(
             "MATCH (n:KnowledgeChunk) RETURN COUNT(*) as cnt"
-        ).fetch_all()[0][0]
+        ).get_all()[0][0]
 
         subskill_count = self.conn.execute(
             "MATCH (n:SubSkillNode) RETURN COUNT(*) as cnt"
-        ).fetch_all()[0][0]
+        ).get_all()[0][0]
 
         return {
             "knowledge_chunks": chunk_count,

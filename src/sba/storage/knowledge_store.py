@@ -137,6 +137,12 @@ class KnowledgeStore:
         if qdrant_ids:
             self.graph_store.update_knowledge_chunk(chunk_id, qdrant_id=qdrant_ids[0])
 
+        # 3-3.5 主SubSkill リンク
+        self.graph_store.add_belongs_to_primary(
+            chunk_id=chunk_id,
+            subskill_id=primary_subskill,
+        )
+
         # 3-4. Secondary SubSkill リンク
         if secondary_subskills:
             for sec_skill in secondary_subskills:

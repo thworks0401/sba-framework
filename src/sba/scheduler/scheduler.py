@@ -246,7 +246,11 @@ class SBAScheduler:
                 "id":            job.id,
                 "name":          job.name,
                 "trigger":       str(job.trigger),
-                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+                "next_run_time": (
+                    getattr(job, "next_run_time", None).isoformat()
+                    if getattr(job, "next_run_time", None)
+                    else None
+                ),
             }
             for job in self.scheduler.get_jobs()
         ]

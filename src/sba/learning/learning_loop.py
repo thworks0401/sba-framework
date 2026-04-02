@@ -82,6 +82,7 @@ class LearningLoop:
         resource_finder:    Optional[ResourceFinder]     = None,
         classifier:         Optional[SubSkillClassifier] = None,
         integrator:         Optional[KnowledgeIntegrator] = None,
+        knowledge_integrator: Optional[KnowledgeIntegrator] = None,
         evaluator:          Optional[SelfEvaluator]      = None,
         experiment_engine:  Optional[ExperimentEngine]   = None,
     ) -> None:
@@ -103,7 +104,7 @@ class LearningLoop:
         self.gap_detector      = gap_detector
         self.resource_finder   = resource_finder
         self.classifier        = classifier
-        self.integrator        = integrator
+        self.integrator        = integrator or knowledge_integrator
         self.evaluator         = evaluator
         self.experiment_engine = experiment_engine
 

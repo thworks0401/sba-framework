@@ -69,6 +69,31 @@ def _extract_json(text: str) -> Optional[Dict]:
         return None
 
 
+def _extract_result_text(result: object) -> str:
+    """Tier1 の戻り値を後方互換的に文字列へ正規化する。"""
+    if result is None:
+        return ""
+
+    if isinstance(result, str):
+        return result
+
+    if isinstance(result, dict):
+        message = result.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+
+        for key in ("text", "response", "content"):
+            value = result.get(key)
+            if isinstance(value, str):
+                return value
+        return ""
+
+    text = getattr(result, "text", None)
+    return text if isinstance(text, str) else ""
+
+
 async def _tier1_chat(tier1: Tier1Engine, prompt: str, max_tokens: int = 1024) -> str:
     """
     Tier1 チャット呼び出し共通ラッパー。
@@ -79,7 +104,7 @@ async def _tier1_chat(tier1: Tier1Engine, prompt: str, max_tokens: int = 1024) -
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
     )
-    return result.text or ""
+    return _extract_result_text(result)
 
 
 # ======================================================================

@@ -198,6 +198,36 @@ class ExperimentEngine:
         except json.JSONDecodeError:
             return None
 
+    @staticmethod
+    def _extract_result_text(result: object) -> str:
+        """
+        推論結果を文字列へ正規化する。
+
+        実運用では InferenceResult を受け取り、テストでは dict / str が返ることも
+        あるため、ここで後方互換的に吸収する。
+        """
+        if result is None:
+            return ""
+
+        if isinstance(result, str):
+            return result
+
+        if isinstance(result, dict):
+            message = result.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+
+            for key in ("text", "response", "content"):
+                value = result.get(key)
+                if isinstance(value, str):
+                    return value
+            return ""
+
+        text = getattr(result, "text", None)
+        return text if isinstance(text, str) else ""
+
     async def _call_tier1(self, prompt: str, max_tokens: int = 1024) -> str:
         """
         Tier1 を呼び出してテキストを返す共通ラッパー。
@@ -209,7 +239,7 @@ class ExperimentEngine:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
         )
-        return result.text or ""
+        return self._extract_result_text(result)
 
     # ======================================================================
     # Step1: 仮説生成

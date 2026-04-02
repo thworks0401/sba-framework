@@ -193,6 +193,9 @@ class APIUsageRepository:
         return {
             "api_name": api_name,
             "usage_month": usage_month,
+            "req_count": row[0] or 0,
+            "token_count": row[1] or 0,
+            "unit_count": row[2] or 0,
             "total_req": row[0] or 0,
             "total_token": row[1] or 0,
             "total_unit": row[2] or 0,
@@ -313,15 +316,22 @@ class APIUsageRepository:
         conn.close()
 
     def clear_api_stopped(self, api_name: str) -> None:
-        """API 停止状態クリア"""
+        """API 停止状態クリア（手動再開時刻も保存）"""
+        resumed_at = datetime.utcnow().isoformat() + "Z"
         conn = self._get_conn()
         cursor = conn.cursor()
 
         cursor.execute("""
+            INSERT OR IGNORE INTO api_stops
+            (api_name, stopped_at, stop_reason, resume_at)
+            VALUES (?, NULL, NULL, ?)
+        """, (api_name, resumed_at))
+
+        cursor.execute("""
             UPDATE api_stops
-            SET stopped_at = NULL, stop_reason = NULL, resume_at = NULL
+            SET stopped_at = NULL, stop_reason = NULL, resume_at = ?
             WHERE api_name = ?
-        """, (api_name,))
+        """, (resumed_at, api_name))
 
         conn.commit()
         conn.close()
@@ -345,6 +355,24 @@ class APIUsageRepository:
 
         return row_dict
 
+    def get_api_resume_override(self, api_name: str) -> dict | None:
+        """直近の手動再開情報を取得。"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT api_name, resume_at
+            FROM api_stops
+            WHERE api_name = ?
+        """, (api_name,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or row["resume_at"] is None:
+            return None
+
+        return dict(row)
+
     # ======================================================================
     # 閾値管理
     # ======================================================================
@@ -362,6 +390,22 @@ class APIUsageRepository:
             return None
 
         return dict(row)
+
+    # ======================================================================
+    # 後方互換 API
+    # ======================================================================
+
+    def mark_api_stopped(self, api_name: str, reason: str) -> None:
+        self.set_api_stopped(api_name, reason)
+
+    def mark_api_resumed(self, api_name: str) -> None:
+        self.clear_api_stopped(api_name)
+
+    def is_api_stopped(self, api_name: str) -> bool:
+        return self.get_api_stop_status(api_name) is not None
+
+    def get_api_stop_record(self, api_name: str) -> dict | None:
+        return self.get_api_stop_status(api_name)
 
     # ======================================================================
     # ダッシュボード

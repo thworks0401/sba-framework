@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,6 +42,24 @@ from .experiment_runner import ExperimentResult, ExperimentRunResult
 
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_generated_code_result(result: object) -> tuple[str, Optional[str]]:
+    """Tier3 の戻り値を後方互換的に正規化する。"""
+    if result is None:
+        return "", "Empty response"
+
+    if isinstance(result, str):
+        return result, None
+
+    if isinstance(result, dict):
+        text = result.get("text") or result.get("response") or ""
+        error = result.get("error")
+        return text if isinstance(text, str) else "", error if isinstance(error, str) else None
+
+    text = getattr(result, "text", "")
+    error = getattr(result, "error", None)
+    return text if isinstance(text, str) else "", error if isinstance(error, str) else None
 
 
 @dataclass
@@ -189,11 +208,11 @@ class SandboxExecutor:
 
         try:
             # 修正: tier3.chat(prompt) → tier3.generate_code(prompt)
-            result    = await self.tier3.generate_code(prompt)
-            code_text = result.text or ""  # 修正: .get("text") → .text
+            result = await self.tier3.generate_code(prompt)
+            code_text, error_text = _extract_generated_code_result(result)
 
-            if result.error:
-                logger.error(f"Tier3 code generation error: {result.error}")
+            if error_text:
+                logger.error(f"Tier3 code generation error: {error_text}")
                 return None
 
             # generate_code() は既にコードブロック抽出済みだが念のため確認
@@ -233,7 +252,7 @@ class SandboxExecutor:
 
             try:
                 proc = subprocess.Popen(
-                    ["python", str(script_path)],
+                    [sys.executable, str(script_path)],
                     stdout  = subprocess.PIPE,
                     stderr  = subprocess.PIPE,
                     text    = True,

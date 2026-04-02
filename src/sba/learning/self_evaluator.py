@@ -11,7 +11,7 @@ Step6: 育成Lv自己評価・次学習優先度決定エンジン
 from __future__ import annotations
 
 import json
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from enum import Enum
@@ -165,10 +165,9 @@ JSON のみを出力せよ。"""
             if result.error:
                 return False
 
-            json_text = self.tier1_engine.extract_json(result.text)
-            if json_text:
-                data = json.loads(json_text)
-                return data.get("is_correct", False)
+            parsed = self.tier1_engine.extract_json(result.text)
+            if parsed:
+                return bool(parsed.get("is_correct", False))
 
             return False
 

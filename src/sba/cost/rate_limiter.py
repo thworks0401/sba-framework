@@ -22,6 +22,7 @@ APIレート制限・デイリーカウンタ管理
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Dict, Tuple
@@ -88,6 +89,9 @@ class APIRateLimiter:
         status, usage_info = self.check_status(api_name)
 
         if status == RateLimitStatus.STOP:
+            if self._has_resume_override(api_name):
+                return (True, RateLimitStatus.THROTTLE, "Manual resume override active")
+
             # 95% 超過時は自動停止
             # 修正: mark_api_stopped() → set_api_stopped()
             self._set_api_stopped(api_name, "95% threshold exceeded")
@@ -143,7 +147,7 @@ class APIRateLimiter:
 
             # 月次使用量チェック（日次制限がない場合）
             month_usage       = self.repo.get_month_usage(api_name)
-            monthly_req_count = month_usage.get("total_req", 0)
+            monthly_req_count = month_usage.get("req_count", month_usage.get("total_req", 0))
 
             if monthly_limit > 0:
                 ratio = monthly_req_count / monthly_limit
@@ -202,7 +206,7 @@ class APIRateLimiter:
             logger.error(f"Error marking {api_name} as stopped: {e}")
 
     def resume_api(self, api_name: str) -> None:
-        """API を再開（管理者手動対応用）"""
+        """API を再開（管理者手動対応用）。"""
         try:
             # 修正: mark_api_resumed() → clear_api_stopped()
             self.repo.clear_api_stopped(api_name)
@@ -272,6 +276,30 @@ class APIRateLimiter:
                 )
         except Exception as e:
             logger.error(f"Error logging status report: {e}")
+
+    def _has_resume_override(self, api_name: str) -> bool:
+        """
+        手動 resume 後に同一使用量で即再停止しないためのワンショット判定。
+
+        直近の resume_at が、当日の usage.updated_at 以後であれば、
+        まだ新しい API 呼び出しが発生していないとみなして一時的に許可する。
+        """
+        try:
+            override = self.repo.get_api_resume_override(api_name)
+            if not override:
+                return False
+
+            today_usage = self.repo.get_today_usage(api_name)
+            updated_at = today_usage.get("updated_at")
+            resume_at = override.get("resume_at")
+            if not updated_at or not resume_at:
+                return False
+
+            updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            resume_dt = datetime.fromisoformat(resume_at.replace("Z", "+00:00"))
+            return updated_dt <= resume_dt
+        except Exception:
+            return False
 
 
 # ======================================================================

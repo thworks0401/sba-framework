@@ -45,6 +45,14 @@ class ResourceCandidate:
     initial_trust_score: float = 0.80  # 初期信頼スコア（0.0～1.0）
     description: str       = ""
     priority: int          = 0         # 優先度（小さいほど高）
+    trust_score: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        # 旧呼び出し側の trust_score=... を吸収する
+        if self.trust_score is None:
+            self.trust_score = self.initial_trust_score
+        else:
+            self.initial_trust_score = self.trust_score
 
 
 class ResourceFinder:
