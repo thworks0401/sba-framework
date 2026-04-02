@@ -66,6 +66,7 @@ class Tier1Engine:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         timeout_s: float = 30.0,
+        response_format: Optional[str] = None,
     ) -> InferenceResult:
         """
         テキストベースの推論リクエストを実行。
@@ -112,6 +113,7 @@ class Tier1Engine:
                     ollama.generate,
                     model=self.MODEL_NAME,
                     prompt=prompt,
+                    format=response_format,
                     options={
                         "temperature": temperature,
                         "num_predict": max_tokens,
@@ -156,6 +158,7 @@ class Tier1Engine:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         timeout_s: float = 30.0,
+        response_format: Optional[str] = None,
     ) -> InferenceResult:
         """
         チャット形式（会話履歴付き）の推論リクエスト。
@@ -195,6 +198,7 @@ class Tier1Engine:
                     ollama.chat,
                     model=self.MODEL_NAME,
                     messages=messages,
+                    format=response_format,
                     options={
                         "temperature": temperature,
                         "num_predict": max_tokens,
@@ -286,3 +290,13 @@ class Tier1Engine:
             return result.error is None
         except Exception:
             return False
+
+    def close(self) -> None:
+        """Ollama クライアント接続を明示的に閉じる。"""
+        try:
+            base_client = getattr(ollama, "_client", None)
+            http_client = getattr(base_client, "_client", None)
+            if http_client is not None:
+                http_client.close()
+        except Exception:
+            pass

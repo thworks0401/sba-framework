@@ -160,6 +160,7 @@ JSON のみを出力せよ。"""
                 temperature=0.6,
                 max_tokens=500,
                 timeout_s=15.0,
+                response_format="json",
             )
 
             if result.error:

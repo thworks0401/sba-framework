@@ -575,7 +575,7 @@ if (-not (Test-Path $envPath)) {
 
 # Google Gemini API キー（必須）
 # 取得先: https://aistudio.google.com/app/apikey
-GEMINI_API_KEY=ここにGemini_APIキーを貼り付ける
+GEMINI_API_KEY=AIzaSyDBXlvLxibH1KKbRJt1UJjkrMQQO8m7-L8
 
 # GitHub Personal Access Token（必須）
 # 取得先: https://github.com/settings/tokens

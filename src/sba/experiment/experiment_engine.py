@@ -238,7 +238,10 @@ class ExperimentEngine:
         result = await self.tier1.chat(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
+            response_format="json",
         )
+        if getattr(result, "error", None):
+            logger.error("Tier1 experiment call failed: %s", result.error)
         return self._extract_result_text(result)
 
     # ======================================================================

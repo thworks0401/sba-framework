@@ -299,7 +299,7 @@ class GitHubFetcher:
 
     async def _await_update_rate_limit(self, response_headers: Dict) -> None:
         """非同期wrapper"""
-        self._update_rate_limit(response_headers)
+        await self._update_rate_limit(response_headers)
 
 
 class StackOverflowFetcher:

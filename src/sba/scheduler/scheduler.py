@@ -479,6 +479,16 @@ def build_learning_runtime(
 
     scheduler = get_scheduler(ctx["brain_id"], ctx["brain_name"], jobstore_path)
 
+    def close_runtime() -> None:
+        try:
+            tier1.close()
+        except Exception:
+            pass
+        try:
+            knowledge_store.close()
+        except Exception:
+            pass
+
     return {
         "context": ctx,
         "scheduler": scheduler,
@@ -488,6 +498,7 @@ def build_learning_runtime(
         "experiment_type_light": ExperimentType.A,
         "experiment_type_medium": ExperimentType.B,
         "experiment_type_heavy": ExperimentType.C if ctx["is_tech"] else ExperimentType.D,
+        "close": close_runtime,
     }
 
 
@@ -558,3 +569,6 @@ def start_daemon(
         logger.info("SBA daemon stopping by keyboard interrupt")
     finally:
         scheduler.stop()
+        closer = runtime.get("close")
+        if callable(closer):
+            closer()

@@ -293,3 +293,10 @@ class QdrantVectorStore:
     def delete_collection(self) -> None:
         """コレクション全削除（Brain削除時に使用）"""
         self.client.delete_collection(collection_name=self.collection_name)
+
+    def close(self) -> None:
+        """ローカル Qdrant クライアントを明示的に解放する。"""
+        try:
+            self.client.close()
+        except Exception:
+            pass

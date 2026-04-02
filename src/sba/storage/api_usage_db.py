@@ -277,9 +277,12 @@ class APIUsageRepository:
             return "ok"
 
         rate = self.get_usage_rate(api_name)
-        warn_pct     = threshold.get("warn_pct",     0.70)
-        throttle_pct = threshold.get("throttle_pct", 0.85)
-        stop_pct     = threshold.get("stop_pct",     0.95)
+        warn_pct_raw = threshold.get("warn_pct", 0.70)
+        throttle_pct_raw = threshold.get("throttle_pct", 0.85)
+        stop_pct_raw = threshold.get("stop_pct", 0.95)
+        warn_pct = 0.70 if warn_pct_raw is None else float(warn_pct_raw)
+        throttle_pct = 0.85 if throttle_pct_raw is None else float(throttle_pct_raw)
+        stop_pct = 0.95 if stop_pct_raw is None else float(stop_pct_raw)
 
         if rate >= stop_pct:
             return "stop"

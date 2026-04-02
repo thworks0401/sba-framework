@@ -124,11 +124,17 @@ class APIRateLimiter:
             if not thresholds:
                 return (RateLimitStatus.OK, "No thresholds configured")
 
-            daily_limit   = thresholds.get("daily_limit", 0)
-            monthly_limit = thresholds.get("monthly_limit", 0)
-            warn_pct      = thresholds.get("warn_pct",     0.70)
-            throttle_pct  = thresholds.get("throttle_pct", 0.85)
-            stop_pct      = thresholds.get("stop_pct",     0.95)
+            daily_limit_raw = thresholds.get("daily_limit", 0)
+            monthly_limit_raw = thresholds.get("monthly_limit", 0)
+            warn_pct_raw = thresholds.get("warn_pct", 0.70)
+            throttle_pct_raw = thresholds.get("throttle_pct", 0.85)
+            stop_pct_raw = thresholds.get("stop_pct", 0.95)
+
+            daily_limit = int(daily_limit_raw or 0)
+            monthly_limit = int(monthly_limit_raw or 0)
+            warn_pct = float(0.70 if warn_pct_raw is None else warn_pct_raw)
+            throttle_pct = float(0.85 if throttle_pct_raw is None else throttle_pct_raw)
+            stop_pct = float(0.95 if stop_pct_raw is None else stop_pct_raw)
 
             # 日次使用量を優先チェック
             today_usage     = self.repo.get_today_usage(api_name)

@@ -63,6 +63,13 @@ class KnowledgeStore:
         self.graph_store   = KuzuGraphStore(str(knowledge_graph_path), brain_id)
         self.timeline_repo = TimelineRepository(str(learning_timeline_path))
 
+    def close(self) -> None:
+        """明示的にストア資源を解放する。"""
+        try:
+            self.vector_store.close()
+        except Exception:
+            pass
+
     # ======================================================================
     # 統合操作: アトミックなチャンク追加
     # ======================================================================

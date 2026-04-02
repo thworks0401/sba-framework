@@ -14,9 +14,11 @@ paths:
   scripts:        C:\TH_Works\SBA\scripts
 
 api_keys:
-  gemini:  ""   # Gemini 2.5 Flash API Key（Tier2用）
-  youtube: ""   # YouTube Data API v3 Key（動画ソース検索用）
-  github:  ""   # GitHub Personal Access Token（コードソース用）
+  # API keys should be set via environment variables or local configuration, not committed to repository
+  # Set GEMINI_API_KEY, YOUTUBE_API_KEY, and GITHUB_API_KEY environment variables instead
+  gemini:  "${GEMINI_API_KEY}"
+  youtube: "${YOUTUBE_API_KEY}"
+  github:  "${GITHUB_API_KEY}"
 
 thresholds:
   default:             0.5   # 汎用閾値
@@ -26,7 +28,7 @@ thresholds:
 
 backup:
   enabled:       true
-  destination:   D:\SBA_Backup   # 外付けSSD or NAS に変更可
+  destination:   E:\SBA_Backup   # 外付けSSD or NAS に変更可
   schedule_cron: "0 4 * * *"     # 毎日 AM 4:00
   keep_versions: 7
   include_active: true

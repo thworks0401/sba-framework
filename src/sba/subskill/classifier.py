@@ -188,6 +188,7 @@ JSON出力のみを返せ。他の文字は出力するな。"""
                 temperature=temperature,
                 max_tokens=512,
                 timeout_s=timeout_s,
+                response_format="json",
             )
 
             if result.error:
