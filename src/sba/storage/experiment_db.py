@@ -85,6 +85,7 @@ class ExperimentRepository:
         exp_type: str,
         hypothesis: str,
         result: str,
+        exp_id: Optional[str] = None,
         plan: str = "",
         input_data: str = "",
         output_data: str = "",
@@ -98,7 +99,7 @@ class ExperimentRepository:
         Returns:
             experiment ID (UUID)
         """
-        exp_id = str(uuid.uuid4())
+        exp_id = exp_id or str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + "Z"
 
         conn = self._get_conn()

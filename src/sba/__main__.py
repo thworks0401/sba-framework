@@ -19,9 +19,11 @@ import typer
 try:
     from sba.cli.brain_cmds import app as brain_app
     from sba.config import SBAConfig
+    from sba.scheduler.scheduler import start_daemon
 except ImportError:
     from .cli.brain_cmds import app as brain_app
     from .config import SBAConfig
+    from .scheduler.scheduler import start_daemon
 
 
 main_app = typer.Typer(
@@ -69,6 +71,32 @@ def show_status() -> None:
         typer.echo("\nUse 'sba brain status' to check active Brain")
     except FileNotFoundError as e:
         typer.secho(str(e), fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@main_app.command(name="daemon")
+def daemon(
+    learning_interval_minutes: int = typer.Option(
+        120,
+        "--learning-interval",
+        help="Learning loop interval in minutes",
+    ),
+    heavyweight_hour: int = typer.Option(
+        3,
+        "--heavy-hour",
+        help="Hour of day to run heavyweight experiment",
+    ),
+) -> None:
+    """自律学習ループを常時稼働させる。"""
+    try:
+        start_daemon(
+            learning_interval_minutes=learning_interval_minutes,
+            heavyweight_hour=heavyweight_hour,
+        )
+    except KeyboardInterrupt:
+        raise typer.Exit(code=0)
+    except Exception as e:
+        typer.secho(f"Daemon start failed: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 

@@ -11,6 +11,7 @@ Step3 コードソース: GitHub API + Stack Overflow API
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Optional, List, Dict
 from dataclasses import dataclass
 from datetime import datetime
@@ -118,7 +119,7 @@ class GitHubFetcher:
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
                 ) as resp:
-                    self._await_update_rate_limit(resp.headers)
+                    await self._await_update_rate_limit(resp.headers)
 
                     if resp.status != 200:
                         raise CodeFetchError(f"GitHub API: HTTP {resp.status}")
@@ -163,7 +164,7 @@ class GitHubFetcher:
                     },
                     timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
                 ) as resp:
-                    self._await_update_rate_limit(resp.headers)
+                    await self._await_update_rate_limit(resp.headers)
 
                     if resp.status == 200:
                         return await resp.text()
@@ -201,7 +202,7 @@ class GitHubFetcher:
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
                 ) as resp:
-                    self._await_update_rate_limit(resp.headers)
+                    await self._await_update_rate_limit(resp.headers)
 
                     if resp.status != 200:
                         raise CodeFetchError(f"HTTP {resp.status}")
@@ -216,6 +217,80 @@ class GitHubFetcher:
                     ]
 
         except Exception as e:
+            return []
+
+    async def fetch_code_snippets(
+        self,
+        repo_full_name: str,
+        max_files: int = 3,
+    ) -> List[str]:
+        """
+        リポジトリから代表的なコード断片を抽出。
+
+        まず default branch を取得し、そのツリーから主要言語ファイルを数件拾う。
+        """
+        try:
+            repo_url = f"{self.BASE_URL}/repos/{repo_full_name}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    repo_url,
+                    headers=self._get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
+                ) as resp:
+                    await self._await_update_rate_limit(resp.headers)
+                    if resp.status != 200:
+                        return []
+                    repo_data = await resp.json()
+
+                branch = repo_data.get("default_branch", "main")
+                tree_url = f"{self.BASE_URL}/repos/{repo_full_name}/git/trees/{branch}"
+                async with session.get(
+                    tree_url,
+                    headers=self._get_headers(),
+                    params={"recursive": 1},
+                    timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
+                ) as resp:
+                    await self._await_update_rate_limit(resp.headers)
+                    if resp.status != 200:
+                        return []
+                    tree_data = await resp.json()
+
+                code_entries = [
+                    item for item in tree_data.get("tree", [])
+                    if item.get("type") == "blob"
+                    and item.get("path", "").endswith(
+                        (".py", ".js", ".ts", ".tsx", ".java", ".go", ".rs", ".cpp", ".c", ".cs")
+                    )
+                ][:max_files]
+
+                snippets: List[str] = []
+                for entry in code_entries:
+                    blob_url = entry.get("url")
+                    if not blob_url:
+                        continue
+                    async with session.get(
+                        blob_url,
+                        headers=self._get_headers(),
+                        timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
+                    ) as resp:
+                        await self._await_update_rate_limit(resp.headers)
+                        if resp.status != 200:
+                            continue
+                        blob_data = await resp.json()
+                        encoded = blob_data.get("content", "")
+                        if not encoded:
+                            continue
+
+                        import base64
+
+                        decoded = base64.b64decode(encoded).decode("utf-8", errors="ignore")
+                        preview = decoded[:1500].strip()
+                        if preview:
+                            snippets.append(f"# {entry.get('path')}\n{preview}")
+
+                return snippets
+        except Exception:
             return []
 
     def get_remaining_quota(self) -> int:
@@ -238,6 +313,32 @@ class StackOverflowFetcher:
 
     def __init__(self) -> None:
         self.daily_used = 0
+
+    async def fetch_answer(self, answer_id: int) -> str:
+        """採択回答本文を取得。"""
+        try:
+            url = f"{self.BASE_URL}/answers/{answer_id}"
+            params = {
+                "site": "stackoverflow",
+                "filter": "withbody",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
+                ) as resp:
+                    self.daily_used += 1
+                    if resp.status != 200:
+                        return ""
+                    data = await resp.json()
+                    items = data.get("items", [])
+                    if not items:
+                        return ""
+                    return items[0].get("body", "")
+        except Exception:
+            return ""
 
     async def search_questions(
         self,
@@ -301,7 +402,9 @@ class StackOverflowFetcher:
                         # 採択回答があればそれも取得
                         if "accepted_answer_id" in item:
                             result.accepted = True
-                            # ※実装注：別途API呼び出しが必要（省略）
+                            result.answer_body = await self.fetch_answer(
+                                item["accepted_answer_id"]
+                            )
 
                         results.append(result)
 
@@ -310,9 +413,69 @@ class StackOverflowFetcher:
         except Exception as e:
             raise CodeFetchError(f"Question search failed: {str(e)}")
 
+    async def fetch_question_detail(self, question_url_or_id: str | int) -> Optional[StackOverflowResult]:
+        """質問本文と採択回答を取得。"""
+        try:
+            question_id = self._extract_question_id(question_url_or_id)
+            if question_id is None:
+                return None
+
+            url = f"{self.BASE_URL}/questions/{question_id}"
+            params = {
+                "site": "stackoverflow",
+                "filter": "withbody",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=self.TIMEOUT_SECONDS),
+                ) as resp:
+                    self.daily_used += 1
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    items = data.get("items", [])
+                    if not items:
+                        return None
+
+                    item = items[0]
+                    result = StackOverflowResult(
+                        question_id=item["question_id"],
+                        title=item.get("title", ""),
+                        question_body=item.get("body", ""),
+                        score=item.get("score", 0),
+                        tags=item.get("tags", []),
+                        url=item.get("link", ""),
+                    )
+
+                    accepted_answer_id = item.get("accepted_answer_id")
+                    if accepted_answer_id:
+                        result.accepted = True
+                        result.answer_body = await self.fetch_answer(accepted_answer_id)
+
+                    return result
+        except Exception:
+            return None
+
     def get_daily_quota_used(self) -> int:
         """日次使用量を取得"""
         return self.daily_used
+
+    @staticmethod
+    def _extract_question_id(question_url_or_id: str | int) -> Optional[int]:
+        if isinstance(question_url_or_id, int):
+            return question_url_or_id
+
+        text = str(question_url_or_id).strip()
+        if text.isdigit():
+            return int(text)
+
+        match = re.search(r"/questions/(\d+)", text)
+        if match:
+            return int(match.group(1))
+        return None
 
 
 class CodeFetcher:
@@ -344,16 +507,22 @@ class CodeFetcher:
         Returns:
             {github_results, stackoverflow_results}
         """
-        tasks = [
-            self.github.search_repositories(query, max_github_results),
-            self.stackoverflow.search_questions(query, max_results=max_so_results),
-        ]
-
         try:
-            github_results, so_results = await asyncio.gather(*tasks)
+            tasks = []
+            task_order = []
+
+            if max_github_results > 0:
+                tasks.append(self.github.search_repositories(query, max_github_results))
+                task_order.append("github")
+            if max_so_results > 0:
+                tasks.append(self.stackoverflow.search_questions(query, max_results=max_so_results))
+                task_order.append("stackoverflow")
+
+            resolved = await asyncio.gather(*tasks) if tasks else []
+            result_map = {name: value for name, value in zip(task_order, resolved)}
             return {
-                "github": github_results,
-                "stackoverflow": so_results,
+                "github": result_map.get("github", []),
+                "stackoverflow": result_map.get("stackoverflow", []),
             }
         except Exception as e:
             raise CodeFetchError(f"Multi-source search failed: {str(e)}")
@@ -381,11 +550,13 @@ class CodeFetcher:
             tasks = [
                 self.github.fetch_readme(repo_full_name),
                 self.github.fetch_issues(repo_full_name),
+                self.github.fetch_code_snippets(repo_full_name),
             ]
 
-            readme, issues = await asyncio.gather(*tasks)
+            readme, issues, code_snippets = await asyncio.gather(*tasks)
             result.readme_content = readme
             result.issues = issues
+            result.code_snippets = code_snippets
 
             return result
 

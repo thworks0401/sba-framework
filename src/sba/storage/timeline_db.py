@@ -229,6 +229,32 @@ class TimelineRepository:
         conn.close()
         return results
 
+    def find_by_url_or_path(self, url_or_path: str) -> Optional[dict]:
+        """URL / パスで学習履歴を検索（最新1件）。"""
+        if not url_or_path:
+            return None
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT * FROM timeline
+            WHERE url_or_path = ?
+            ORDER BY learned_at DESC
+            LIMIT 1
+            """,
+            (url_or_path,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return self._parse_row(dict(row))
+
     # ======================================================================
     # 更新
     # ======================================================================

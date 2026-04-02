@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import tempfile
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,6 +215,48 @@ class VideoFetcher:
         self.subtitle_extractor = SubtitleExtractor()
         self.segmenter = VideoSegmenter()
 
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> List[Dict]:
+        """
+        yt-dlp の ytsearch を使って動画候補を検索。
+
+        YouTube Data API に依存せず、学習候補収集の入口として使う。
+        """
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "extract_flat": True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                data = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
+
+            entries = data.get("entries", []) if isinstance(data, dict) else []
+            results = []
+            for entry in entries[:max_results]:
+                if not entry:
+                    continue
+                video_id = entry.get("id")
+                url = entry.get("url")
+                if video_id and not url:
+                    url = f"https://www.youtube.com/watch?v={video_id}"
+                results.append(
+                    {
+                        "url": url or "",
+                        "title": entry.get("title", ""),
+                        "description": entry.get("description", ""),
+                        "duration": entry.get("duration"),
+                    }
+                )
+            return results
+        except Exception as e:
+            raise VideoError(f"Video search failed: {str(e)}")
+
     async def fetch_video_content(
         self,
         video_url: str,
@@ -298,32 +341,52 @@ class VideoFetcher:
             VideoContent
         """
         try:
-            # ※実装注：動画ダウンロード処理は省略
-            # 実際には yt-dlp でダウンロード→一時ファイル→Whisper へ
-            # ここでは形式的に実装
-
-            # スタブ：Whisper 呼び出し（実装時にダウンロードを追加）
-            # result = await self.whisper.transcribe(audio_path)
-            # if result.error:
-            #     return VideoContent(url=video_url, error=result.error)
-            # full_text = result.text
-
-            # セグメント化
-            # （簡易実装：全テキストを1セグメントで返す）
-            segments = [
-                VideoSegment(
-                    start_time=0.0,
-                    end_time=duration,
-                    text="[Whisper transcription would go here]",  # スタブ
+            audio_path = await self._download_audio(video_url)
+            if not audio_path:
+                return VideoContent(
+                    url=video_url,
+                    title=title,
+                    error="Audio download failed",
                 )
-            ]
+
+            result = await self.whisper.transcribe(audio_path)
+            try:
+                Path(audio_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            if result.error:
+                return VideoContent(
+                    url=video_url,
+                    title=title,
+                    error=result.error,
+                )
+
+            if result.segments:
+                segments = [
+                    VideoSegment(
+                        start_time=float(segment.get("start", 0.0)),
+                        end_time=float(segment.get("end", 0.0)),
+                        text=segment.get("text", "").strip(),
+                    )
+                    for segment in result.segments
+                    if segment.get("text")
+                ]
+            else:
+                segments = [
+                    VideoSegment(
+                        start_time=0.0,
+                        end_time=duration,
+                        text=result.text.strip(),
+                    )
+                ]
 
             return VideoContent(
                 url=video_url,
                 title=title,
                 duration_seconds=duration,
                 segments=segments,
-                full_transcript="[Whisper transcription]",
+                full_transcript=result.text,
                 source="transcription",
             )
 
@@ -333,6 +396,35 @@ class VideoFetcher:
                 title=title,
                 error=f"Whisper transcription failed: {str(e)}",
             )
+
+    async def _download_audio(self, video_url: str) -> Optional[str]:
+        """yt-dlp で音声のみを一時ダウンロードしてパスを返す。"""
+        temp_dir = Path(tempfile.mkdtemp(prefix="sba_video_"))
+        output_template = str(temp_dir / "audio.%(ext)s")
+
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "format": "bestaudio/best",
+                "outtmpl": output_template,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                requested = info.get("requested_downloads") or []
+                if requested:
+                    filepath = requested[0].get("filepath")
+                    if filepath and Path(filepath).exists():
+                        return filepath
+
+            for path in temp_dir.iterdir():
+                if path.is_file():
+                    return str(path)
+        except Exception:
+            return None
+
+        return None
 
     async def fetch_batch(
         self,

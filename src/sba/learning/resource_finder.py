@@ -16,11 +16,18 @@ Step2: 学習リソース自動探索エンジン
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
 # 修正: experiment_db ではなく api_usage_db が正しいインポート元
+from ..config import SBAConfig
+from ..cost.rate_limiter import APIRateLimiter, RateLimitStatus
+from ..sources.code_fetcher import CodeFetcher
+from ..sources.pdf_fetcher import PDFFetcher
+from ..sources.video_fetcher import VideoFetcher
+from ..sources.web_fetcher import WebFetcher
 from ..storage.api_usage_db import APIUsageRepository
 from ..storage.knowledge_store import KnowledgeStore
 
@@ -99,6 +106,11 @@ class ResourceFinder:
         brain_name: str,
         knowledge_store: Optional[KnowledgeStore] = None,
         api_usage_repo: Optional[APIUsageRepository] = None,
+        rate_limiter: Optional[APIRateLimiter] = None,
+        web_fetcher: Optional[WebFetcher] = None,
+        pdf_fetcher: Optional[PDFFetcher] = None,
+        video_fetcher: Optional[VideoFetcher] = None,
+        code_fetcher: Optional[CodeFetcher] = None,
     ) -> None:
         """
         Initialize ResourceFinder.
@@ -111,6 +123,13 @@ class ResourceFinder:
         self.brain_name      = brain_name
         self.knowledge_store = knowledge_store
         self.api_usage_repo  = api_usage_repo
+        self.rate_limiter    = rate_limiter
+        self.web_fetcher     = web_fetcher or WebFetcher()
+        self.pdf_fetcher     = pdf_fetcher or PDFFetcher()
+        self.video_fetcher   = video_fetcher or VideoFetcher()
+        self.code_fetcher    = code_fetcher or CodeFetcher(
+            github_token=self._resolve_github_token()
+        )
 
     def _get_source_priority(self, is_tech_brain: bool) -> List[SourceType]:
         """Brain性質に応じてソース優先度を取得"""
@@ -123,6 +142,14 @@ class ResourceFinder:
         Returns:
             {api_name: quota_available (True=使用可)}
         """
+        if self.rate_limiter:
+            quota_status: Dict[str, bool] = {}
+            for api_name in ("gemini", "youtube", "github", "stackoverflow"):
+                allowed, status, _ = self.rate_limiter.check_usage_before_call(api_name)
+                quota_status[api_name] = allowed and status != RateLimitStatus.STOP
+            quota_status["arxiv"] = True
+            return quota_status
+
         if not self.api_usage_repo:
             # リポジトリ未設定時は全て利用可能とみなす
             return {
@@ -253,6 +280,19 @@ class ResourceFinder:
         Returns:
             ResourceCandidate のリスト（現在は空 = Fetcher統合待ち）
         """
+        if source_type == SourceType.WEB:
+            return await self._search_web(query, source_type=SourceType.WEB)
+        if source_type == SourceType.WIKIPEDIA:
+            return await self._search_web(
+                f"site:wikipedia.org {query}",
+                source_type=SourceType.WIKIPEDIA,
+            )
+        if source_type in (SourceType.ARXIV, SourceType.PDF):
+            return await self._search_papers(query, source_type)
+        if source_type == SourceType.YOUTUBE:
+            return await self._search_youtube(query)
+        if source_type in (SourceType.GITHUB, SourceType.STACKOVERFLOW):
+            return await self._search_code_sources(query, source_type)
         return []
 
     def rank_candidates(
@@ -291,3 +331,172 @@ class ResourceFinder:
             elif candidate.source_type == SourceType.STACKOVERFLOW:
                 impact["stackoverflow"] = impact.get("stackoverflow", 0) + 1
         return impact
+
+    # ======================================================================
+    # Source-specific search implementations
+    # ======================================================================
+
+    async def _search_web(
+        self,
+        query: str,
+        source_type: SourceType,
+        max_results: int = 4,
+    ) -> List[ResourceCandidate]:
+        results = await self.web_fetcher.search(query, max_results=max_results)
+        trust = self.TRUST_SCORES[source_type]
+
+        return [
+            ResourceCandidate(
+                source_type=source_type,
+                url=item.get("url", ""),
+                title=item.get("title", ""),
+                description=item.get("description", ""),
+                initial_trust_score=trust,
+                priority=index,
+            )
+            for index, item in enumerate(results, start=1)
+            if item.get("url")
+        ]
+
+    async def _search_papers(
+        self,
+        query: str,
+        source_type: SourceType,
+        max_results: int = 4,
+    ) -> List[ResourceCandidate]:
+        papers = await self.pdf_fetcher.search_papers(query, max_results=max_results)
+        trust = self.TRUST_SCORES[source_type]
+
+        return [
+            ResourceCandidate(
+                source_type=source_type,
+                url=item.get("pdf_url") or item.get("arxiv_url") or "",
+                title=item.get("title", ""),
+                description=item.get("summary", ""),
+                initial_trust_score=trust,
+                priority=index,
+            )
+            for index, item in enumerate(papers, start=1)
+            if item.get("pdf_url") or item.get("arxiv_id")
+        ]
+
+    async def _search_youtube(
+        self,
+        query: str,
+        max_results: int = 4,
+    ) -> List[ResourceCandidate]:
+        results = await self.video_fetcher.search(query, max_results=max_results)
+        self._record_api_call("youtube", req_count=1)
+
+        candidates = []
+        for index, item in enumerate(results, start=1):
+            url = item.get("url") or ""
+            if not url:
+                continue
+
+            duration = item.get("duration")
+            description = item.get("description") or ""
+            if duration:
+                description = f"{description} duration={duration}s".strip()
+
+            candidates.append(
+                ResourceCandidate(
+                    source_type=SourceType.YOUTUBE,
+                    url=url,
+                    title=item.get("title", ""),
+                    description=description,
+                    initial_trust_score=self.TRUST_SCORES[SourceType.YOUTUBE],
+                    priority=index,
+                )
+            )
+        return candidates
+
+    async def _search_code_sources(
+        self,
+        query: str,
+        source_type: SourceType,
+        max_results: int = 4,
+    ) -> List[ResourceCandidate]:
+        bundle = await self.code_fetcher.search_code_solutions(
+            query,
+            max_github_results=max_results if source_type == SourceType.GITHUB else 0,
+            max_so_results=max_results if source_type == SourceType.STACKOVERFLOW else 0,
+        )
+
+        candidates: List[ResourceCandidate] = []
+
+        if source_type == SourceType.GITHUB:
+            self._record_api_call("github", req_count=1)
+            for index, repo in enumerate(bundle.get("github", []), start=1):
+                trust = min(
+                    0.95,
+                    self.TRUST_SCORES[SourceType.GITHUB] + min(repo.stars, 5000) / 25000,
+                )
+                description = f"{repo.language} / stars={repo.stars}".strip(" /")
+                candidates.append(
+                    ResourceCandidate(
+                        source_type=SourceType.GITHUB,
+                        url=repo.url,
+                        title=repo.repo_name,
+                        description=description,
+                        initial_trust_score=trust,
+                        priority=index,
+                    )
+                )
+
+        if source_type == SourceType.STACKOVERFLOW:
+            self._record_api_call("stackoverflow", req_count=1)
+            for index, qa in enumerate(bundle.get("stackoverflow", []), start=1):
+                trust_bonus = 0.0
+                if qa.accepted:
+                    trust_bonus += 0.1
+                trust_bonus += min(max(qa.score, 0), 50) / 500
+                trust = min(0.85, self.TRUST_SCORES[SourceType.STACKOVERFLOW] + trust_bonus)
+                candidates.append(
+                    ResourceCandidate(
+                        source_type=SourceType.STACKOVERFLOW,
+                        url=qa.url,
+                        title=qa.title,
+                        description=f"score={qa.score}, accepted={qa.accepted}",
+                        initial_trust_score=trust,
+                        priority=index,
+                    )
+                )
+
+        return candidates
+
+    def _record_api_call(
+        self,
+        api_name: str,
+        req_count: int = 1,
+        token_count: int = 0,
+        unit_count: int = 0,
+    ) -> None:
+        if self.rate_limiter:
+            self.rate_limiter.record_api_call(
+                api_name,
+                req_count=req_count,
+                token_count=token_count,
+                unit_count=unit_count,
+            )
+            return
+
+        if self.api_usage_repo:
+            self.api_usage_repo.increment_usage(
+                api_name,
+                req_count=req_count,
+                token_count=token_count,
+                unit_count=unit_count,
+            )
+
+    @staticmethod
+    def _resolve_github_token() -> Optional[str]:
+        env_token = os.environ.get("GITHUB_TOKEN")
+        if env_token:
+            return env_token
+
+        try:
+            cfg = SBAConfig.load_env()
+            return cfg.api_keys.github or None
+        except Exception:
+            return None

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Optional
 from pathlib import Path
 
@@ -273,6 +274,25 @@ class KnowledgeStore:
         """SubSkill 別チャンク一覧"""
         return self.graph_store.get_chunks_by_subskill(subskill_id)
 
+    def check_url_in_timeline(self, url: str) -> dict | None:
+        """Learning Timeline に同一 URL / パスがあるか確認。"""
+        return self.timeline_repo.find_by_url_or_path(url)
+
+    def search_similar(
+        self,
+        text: str,
+        limit: int = 5,
+        subskill_id: Optional[str] = None,
+        score_threshold: float = 0.0,
+    ) -> list[dict]:
+        """ベクトル検索で類似チャンクを取得。"""
+        return self.vector_store.search(
+            query_text=text,
+            subskill_id=subskill_id,
+            limit=limit,
+            score_threshold=score_threshold,
+        )
+
     # ======================================================================
     # 矛盾検出・知識統合
     # ======================================================================
@@ -294,7 +314,39 @@ class KnowledgeStore:
         Returns:
             矛盾が見つかった既存 chunk_id、見つからなければ None
         """
-        return None  # TODO: Phase 4 タスク 4-8 で実装
+        new_chunk = self.get_chunk(new_chunk_id)
+        if not new_chunk:
+            return None
+
+        candidates = self.search_similar(
+            new_chunk.get("text", ""),
+            limit=10,
+            subskill_id=new_chunk.get("primary_subskill"),
+            score_threshold=0.55,
+        )
+
+        for candidate in candidates:
+            existing_id = candidate.get("chunk_id")
+            if not existing_id or existing_id == new_chunk_id:
+                continue
+
+            existing_chunk = self.get_chunk(existing_id)
+            if not existing_chunk or existing_chunk.get("is_deprecated"):
+                continue
+
+            contradiction_score = self._estimate_contradiction_score(
+                new_chunk.get("text", ""),
+                existing_chunk.get("text", ""),
+            )
+            trust_delta = abs(
+                float(new_chunk.get("trust_score", 0.5))
+                - float(existing_chunk.get("trust_score", 0.5))
+            )
+
+            if contradiction_score >= trust_score_threshold and trust_delta <= 0.35:
+                return existing_id
+
+        return None
 
     def add_contradiction_edge(self, chunk_a_id: str, chunk_b_id: str) -> None:
         """矛盾ノード間にエッジ付与"""
@@ -329,3 +381,62 @@ class KnowledgeStore:
             })
 
         return subskills
+
+    # ======================================================================
+    # 内部ユーティリティ
+    # ======================================================================
+
+    @staticmethod
+    def _estimate_contradiction_score(text_a: str, text_b: str) -> float:
+        """
+        軽量ヒューリスティックで矛盾度を見積もる。
+
+        類似した文脈で否定語や数値が食い違うケースを優先して検出する。
+        """
+        normalized_a = KnowledgeStore._normalize_text(text_a)
+        normalized_b = KnowledgeStore._normalize_text(text_b)
+
+        if not normalized_a or not normalized_b:
+            return 0.0
+
+        tokens_a = set(normalized_a.split())
+        tokens_b = set(normalized_b.split())
+        union = tokens_a | tokens_b
+        overlap = len(tokens_a & tokens_b) / len(union) if union else 0.0
+
+        neg_a = KnowledgeStore._contains_negation(normalized_a)
+        neg_b = KnowledgeStore._contains_negation(normalized_b)
+
+        nums_a = set(re.findall(r"\b\d+(?:\.\d+)?\b", normalized_a))
+        nums_b = set(re.findall(r"\b\d+(?:\.\d+)?\b", normalized_b))
+        number_conflict = bool(nums_a and nums_b and nums_a != nums_b)
+
+        if overlap >= 0.45 and neg_a != neg_b:
+            return 0.9
+        if overlap >= 0.55 and number_conflict:
+            return 0.8
+        if overlap >= 0.7 and normalized_a != normalized_b:
+            return 0.45
+        return 0.0
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text or "").strip().lower()
+
+    @staticmethod
+    def _contains_negation(text: str) -> bool:
+        negations = (
+            " not ",
+            " never ",
+            " cannot ",
+            " can't ",
+            " no ",
+            " without ",
+            " ない ",
+            " ず ",
+            " ません ",
+            " 禁止 ",
+            " 不可 ",
+        )
+        padded = f" {text} "
+        return any(token in padded for token in negations)

@@ -17,6 +17,7 @@ Step5: 知識統合・矛盾検出・再構造化エンジン
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from typing import Optional, List, Dict
 from dataclasses import dataclass
@@ -98,8 +99,11 @@ class KnowledgeIntegrator:
                 similar_nodes = []
 
             for existing_node in similar_nodes:
-                existing_id    = existing_node.get("id")
+                existing_id    = existing_node.get("id") or existing_node.get("chunk_id")
                 existing_trust = existing_node.get("trust_score", 0.5)
+
+                if not existing_id or existing_id == new_id:
+                    continue
 
                 # 矛盾度スコアを計算
                 contradiction_score = await self._compute_contradiction_score(
@@ -139,8 +143,16 @@ class KnowledgeIntegrator:
             return []
 
         try:
-            similar = await self.knowledge_store.search_similar(text, limit=5)
-            return [item for item in similar if item.get("similarity", 0) >= threshold]
+            similar = self.knowledge_store.search_similar(text, limit=5)
+            if inspect.isawaitable(similar):
+                similar = await similar
+
+            normalized = []
+            for item in similar:
+                similarity = item.get("similarity", item.get("score", 0.0))
+                normalized.append({**item, "similarity": similarity})
+
+            return [item for item in normalized if item.get("similarity", 0) >= threshold]
         except Exception:
             return []
 
@@ -165,9 +177,13 @@ class KnowledgeIntegrator:
 {new_text[:500]}
 
 矛盾点を検出し、スコア（0.0=完全一致、1.0=完全矛盾）のみを返せ。
-出力: 数値のみ（小数点第2位まで）"""
+        出力: 数値のみ（小数点第2位まで）"""
 
         try:
+            heuristic = self._heuristic_contradiction_score(new_text, existing_text)
+            if heuristic >= self.CONTRADICTION_THRESHOLD:
+                return heuristic
+
             result = await self.tier1_engine.infer(
                 prompt=prompt,
                 temperature=0.2,
@@ -176,13 +192,13 @@ class KnowledgeIntegrator:
             )
 
             if result.error:
-                return 0.3  # デフォルト
+                return heuristic
 
             match = re.search(r"0\.\d+", result.text)
-            return float(match.group()) if match else 0.3
+            return float(match.group()) if match else heuristic
 
         except Exception:
-            return 0.3
+            return self._heuristic_contradiction_score(new_text, existing_text)
 
     # ======================================================================
     # 矛盾解決
@@ -239,6 +255,18 @@ class KnowledgeIntegrator:
 
             # 人間確認が必要な場合を記録
             if contradiction.requires_human_review:
+                if self.knowledge_store:
+                    try:
+                        self.knowledge_store.mark_requires_review(
+                            contradiction.existing_node_id,
+                            reason=contradiction.reason,
+                        )
+                        self.knowledge_store.mark_requires_review(
+                            contradiction.new_node_id,
+                            reason=contradiction.reason,
+                        )
+                    except Exception:
+                        pass
                 human_review_items.append({
                     "existing_id":         contradiction.existing_node_id,
                     "new_id":              contradiction.new_node_id,
@@ -281,6 +309,9 @@ class KnowledgeIntegrator:
         stored_count = 0
         for chunk in new_chunks:
             try:
+                if chunk.get("id"):
+                    stored_count += 1
+                    continue
                 if self.knowledge_store:
                     self.knowledge_store.store_chunk(
                         text             = chunk.get("text", ""),
@@ -300,3 +331,29 @@ class KnowledgeIntegrator:
             "human_review_items":      len(resolution["human_review_items"]),
             "details":                 resolution,
         }
+
+    @staticmethod
+    def _heuristic_contradiction_score(new_text: str, existing_text: str) -> float:
+        normalized_new = re.sub(r"\s+", " ", (new_text or "")).strip().lower()
+        normalized_old = re.sub(r"\s+", " ", (existing_text or "")).strip().lower()
+
+        if not normalized_new or not normalized_old:
+            return 0.0
+
+        words_new = set(normalized_new.split())
+        words_old = set(normalized_old.split())
+        union = words_new | words_old
+        overlap = len(words_new & words_old) / len(union) if union else 0.0
+
+        neg_tokens = (" not ", " never ", " cannot ", " no ", " ない ", " ません ", " 禁止 ")
+        neg_new = any(token in f" {normalized_new} " for token in neg_tokens)
+        neg_old = any(token in f" {normalized_old} " for token in neg_tokens)
+
+        numbers_new = set(re.findall(r"\b\d+(?:\.\d+)?\b", normalized_new))
+        numbers_old = set(re.findall(r"\b\d+(?:\.\d+)?\b", normalized_old))
+
+        if overlap >= 0.45 and neg_new != neg_old:
+            return 0.9
+        if overlap >= 0.55 and numbers_new and numbers_old and numbers_new != numbers_old:
+            return 0.8
+        return 0.25 if overlap >= 0.5 else 0.0

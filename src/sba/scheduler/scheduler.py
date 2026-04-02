@@ -18,7 +18,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Any, Dict, List
@@ -308,8 +311,9 @@ if (Get-Service $serviceName -ErrorAction SilentlyContinue) {{
 }}
 
 Write-Host "Installing service: $serviceName"
-& $nssmPath install $serviceName "python" "$appPath"
+& $nssmPath install $serviceName "{app_path}"
 & $nssmPath set $serviceName AppDirectory "{app_dir}"
+& $nssmPath set $serviceName AppParameters "-m sba daemon"
 & $nssmPath set $serviceName AppNoConsole 1
 & $nssmPath set $serviceName OutputDir "{output_dir}"
 & $nssmPath set $serviceName AppRotateFiles 1
@@ -371,3 +375,186 @@ def get_scheduler(
         _scheduler_instance = SBAScheduler(brain_id, brain_name, jobstore_path)
 
     return _scheduler_instance
+
+
+def _load_active_brain_context() -> Dict[str, Any]:
+    """[active] Brain の metadata / manifest を読み込む。"""
+    from ..config import SBAConfig
+
+    cfg = SBAConfig.load_env()
+    metadata = json.loads((cfg.active / "metadata.json").read_text(encoding="utf-8-sig"))
+    manifest = json.loads((cfg.active / "subskill_manifest.json").read_text(encoding="utf-8-sig"))
+
+    brain_id = metadata.get("brain_id") or "active-brain"
+    brain_name = metadata.get("name") or metadata.get("domain") or "Active Brain"
+    domain = metadata.get("domain") or manifest.get("domain") or brain_name
+    is_tech = any(
+        token in str(domain).lower()
+        for token in ("python", "tech", "code", "program", "開発")
+    )
+
+    return {
+        "cfg": cfg,
+        "metadata": metadata,
+        "manifest": manifest,
+        "brain_id": brain_id,
+        "brain_name": brain_name,
+        "domain": domain,
+        "is_tech": is_tech,
+    }
+
+
+def build_learning_runtime(
+    jobstore_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """daemon 用の学習ループ / 周辺コンポーネントを構築する。"""
+    from ..cost.rate_limiter import get_rate_limiter
+    from ..experiment.experiment_engine import ExperimentEngine, ExperimentType
+    from ..inference.tier1 import Tier1Engine
+    from ..learning.gap_detector import GapDetector
+    from ..learning.knowledge_integrator import KnowledgeIntegrator
+    from ..learning.learning_loop import LearningLoop
+    from ..learning.resource_finder import ResourceFinder
+    from ..learning.self_evaluator import SelfEvaluator
+    from ..storage.knowledge_store import KnowledgeStore
+    from ..subskill.classifier import SubSkillClassifier
+    from ..utils.notifier import get_notifier
+
+    ctx = _load_active_brain_context()
+    cfg = ctx["cfg"]
+
+    tier1 = Tier1Engine()
+    knowledge_store = KnowledgeStore(str(cfg.active), ctx["brain_id"])
+    rate_limiter = get_rate_limiter(str(cfg.data / "api_usage.db"))
+    notifier = get_notifier(str(cfg.logs))
+
+    gap_detector = GapDetector(
+        brain_name=ctx["brain_name"],
+        knowledge_store=knowledge_store,
+        tier1_engine=tier1,
+    )
+    resource_finder = ResourceFinder(
+        brain_name=ctx["brain_name"],
+        knowledge_store=knowledge_store,
+        api_usage_repo=rate_limiter.repo,
+        rate_limiter=rate_limiter,
+    )
+    classifier = SubSkillClassifier(
+        ctx["brain_name"],
+        ctx["manifest"],
+        tier1_engine=tier1,
+    )
+    integrator = KnowledgeIntegrator(
+        knowledge_store=knowledge_store,
+        graph_store=knowledge_store.graph_store,
+        tier1_engine=tier1,
+    )
+    evaluator = SelfEvaluator(
+        brain_name=ctx["brain_name"],
+        brain_id=ctx["brain_id"],
+        tier1_engine=tier1,
+    )
+    experiment_engine = ExperimentEngine(
+        brain_id=ctx["brain_id"],
+        brain_name=ctx["brain_name"],
+        domain=ctx["domain"],
+        active_brain_path=cfg.active,
+        tier1=tier1,
+    )
+
+    learning_loop = LearningLoop(
+        brain_id=ctx["brain_id"],
+        brain_name=ctx["brain_name"],
+        active_brain_path=cfg.active,
+        gap_detector=gap_detector,
+        resource_finder=resource_finder,
+        classifier=classifier,
+        integrator=integrator,
+        evaluator=evaluator,
+        experiment_engine=experiment_engine,
+        knowledge_store=knowledge_store,
+        notifier=notifier,
+        rate_limiter=rate_limiter,
+    )
+
+    scheduler = get_scheduler(ctx["brain_id"], ctx["brain_name"], jobstore_path)
+
+    return {
+        "context": ctx,
+        "scheduler": scheduler,
+        "learning_loop": learning_loop,
+        "rate_limiter": rate_limiter,
+        "notifier": notifier,
+        "experiment_type_light": ExperimentType.A,
+        "experiment_type_medium": ExperimentType.B,
+        "experiment_type_heavy": ExperimentType.C if ctx["is_tech"] else ExperimentType.D,
+    }
+
+
+def start_daemon(
+    jobstore_path: Optional[str] = None,
+    learning_interval_minutes: int = 120,
+    heavyweight_hour: int = 3,
+) -> None:
+    """
+    APScheduler + 学習ループ + 実験ジョブを起動し、常駐待機する。
+
+    NSSM / `python -m sba daemon` から呼ばれるエントリポイント。
+    """
+    runtime = build_learning_runtime(jobstore_path)
+    scheduler: SBAScheduler = runtime["scheduler"]
+    learning_loop = runtime["learning_loop"]
+    rate_limiter = runtime["rate_limiter"]
+    notifier = runtime["notifier"]
+
+    def run_async(label: str, async_fn: Callable[[], Any]) -> None:
+        try:
+            asyncio.run(async_fn())
+        except Exception as e:
+            logger.error("%s job failed: %s", label, e)
+            try:
+                notifier.error(f"{label} job failed: {e}")
+            except Exception:
+                pass
+
+    scheduler.register_lightweight_experiment_job(
+        lambda: run_async(
+            "lightweight_experiment",
+            lambda: learning_loop.run_targeted_experiment(runtime["experiment_type_light"]),
+        )
+    )
+    scheduler.register_medium_experiment_job(
+        lambda: run_async(
+            "medium_experiment",
+            lambda: learning_loop.run_targeted_experiment(runtime["experiment_type_medium"]),
+        )
+    )
+    scheduler.register_heavyweight_experiment_job(
+        lambda: run_async(
+            "heavyweight_experiment",
+            lambda: learning_loop.run_targeted_experiment(runtime["experiment_type_heavy"]),
+        ),
+        run_hour=heavyweight_hour,
+    )
+    scheduler.register_learning_loop_job(
+        lambda: run_async("learning_loop", learning_loop.run_single_cycle),
+        interval_minutes=learning_interval_minutes,
+    )
+    scheduler.register_daily_counter_reset_job(rate_limiter.reset_daily_counters_if_needed)
+
+    if not scheduler.start():
+        raise RuntimeError("Failed to start SBA daemon scheduler")
+
+    scheduler.log_status_report()
+    try:
+        notifier.success("SBA daemon started")
+    except Exception:
+        pass
+
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        logger.info("SBA daemon stopping by keyboard interrupt")
+    finally:
+        scheduler.stop()
