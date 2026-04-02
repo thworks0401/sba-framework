@@ -12,12 +12,20 @@
   - B: 推論実験（論理問題生成→多段推論→矛盾チェック）
   - C: コード実験（Tier3でコード生成→subprocess実行→結果検証）
   - D: シミュレーション実験（ビジネスケース生成→自己判断→評価）
+
+【修正履歴】
+  generate_hypothesis / select_experiment_type / generate_experiment_procedure の3メソッドで:
+  - tier1.chat(prompt_str) → tier1.chat([{"role":"user","content":prompt}]) に修正
+    （Tier1Engine.chat() は messages: list[dict] を要求する）
+  - response.get("text","") → result.text に修正
+    （戻り値は InferenceResult dataclass であり dict ではない）
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
@@ -33,10 +41,10 @@ logger = logging.getLogger(__name__)
 
 class ExperimentType(Enum):
     """実験種別"""
-    A = "knowledge_check"       # 知識確認実験
-    B = "reasoning"             # 推論実験
-    C = "code"                  # コード実験
-    D = "simulation"            # シミュレーション実験
+    A = "knowledge_check"   # 知識確認実験
+    B = "reasoning"         # 推論実験
+    C = "code"              # コード実験
+    D = "simulation"        # シミュレーション実験
 
 
 @dataclass
@@ -44,8 +52,8 @@ class Hypothesis:
     """仮説データ"""
     text: str
     subskill: str
-    confidence: float          # 0.0 - 1.0
-    gap_description: str       # 知識ギャップの説明
+    confidence: float        # 0.0 - 1.0
+    gap_description: str     # 知識ギャップの説明
 
 
 @dataclass
@@ -75,7 +83,6 @@ class ExperimentEngine:
         - Experiment Log に準備レコード作成
     """
 
-    # Tier1 へのプロンプトテンプレート
     HYPOTHESIS_GENERATION_PROMPT_TEMPLATE = """
 あなたは Brain（知識育成エージェント）です。
 {brain_name} に与えられた弱点SubSkillについて、検証すべき仮説を生成してください。
@@ -167,24 +174,42 @@ class ExperimentEngine:
         tier1: Optional[Tier1Engine] = None,
         exp_repo: Optional[ExperimentRepository] = None,
     ) -> None:
-        """
-        Args:
-            brain_id: Brain ID
-            brain_name: Brain名
-            domain: ドメイン名
-            active_brain_path: Brain ディレクトリパス
-            tier1: Tier1Engine インスタンス（Noneなら後で設定）
-            exp_repo: ExperimentRepository インスタンス
-        """
-        self.brain_id = brain_id
-        self.brain_name = brain_name
-        self.domain = domain
+        self.brain_id          = brain_id
+        self.brain_name        = brain_name
+        self.domain            = domain
         self.active_brain_path = Path(active_brain_path)
-
-        self.tier1 = tier1
-        self.exp_repo = exp_repo or ExperimentRepository(
+        self.tier1             = tier1
+        self.exp_repo          = exp_repo or ExperimentRepository(
             str(self.active_brain_path / "experiment_log.db")
         )
+
+    # ======================================================================
+    # 内部ユーティリティ
+    # ======================================================================
+
+    @staticmethod
+    def _extract_json_from_text(text: str) -> Optional[dict]:
+        """推論結果テキストから JSON を抽出"""
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            return None
+
+    async def _call_tier1(self, prompt: str, max_tokens: int = 1024) -> str:
+        """
+        Tier1 を呼び出してテキストを返す共通ラッパー。
+
+        修正: tier1.chat() は messages: list[dict] を要求する。
+             戻り値は InferenceResult（.text でアクセス）。
+        """
+        result = await self.tier1.chat(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+        )
+        return result.text or ""
 
     # ======================================================================
     # Step1: 仮説生成
@@ -196,50 +221,33 @@ class ExperimentEngine:
         gap_description: str,
         current_score: float,
     ) -> Optional[Hypothesis]:
-        """
-        弱点SubSkill から仮説テキストを生成（Tier1使用）
-
-        Args:
-            weak_subskill: 弱点SubSkill名
-            gap_description: ギャップの説明テキスト
-            current_score: 現在のスコア（0.0 - 1.0）
-
-        Returns:
-            Hypothesis インスタンス（失敗時は None）
-        """
+        """弱点SubSkill から仮説テキストを生成（Tier1使用）"""
         if not self.tier1:
             logger.error("Tier1Engine not initialized")
             return None
 
         prompt = self.HYPOTHESIS_GENERATION_PROMPT_TEMPLATE.format(
-            brain_name=self.brain_name,
-            domain=self.domain,
-            weak_subskill=weak_subskill,
-            gap_description=gap_description,
-            current_score=current_score,
+            brain_name    = self.brain_name,
+            domain        = self.domain,
+            weak_subskill = weak_subskill,
+            gap_description = gap_description,
+            current_score = current_score,
         )
 
         try:
-            response = await self.tier1.chat(prompt)
-            response_text = response.get("text", "")
-
-            # JSON抽出
-            import re
-            json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-            if not json_match:
-                logger.error(f"No JSON found in hypothesis response: {response_text[:200]}")
+            response_text = await self._call_tier1(prompt)
+            parsed = self._extract_json_from_text(response_text)
+            if not parsed:
+                logger.error(f"No JSON in hypothesis response: {response_text[:200]}")
                 return None
 
-            hypo_json = json.loads(json_match.group())
             hypothesis = Hypothesis(
-                text=hypo_json.get("hypothesis", ""),
-                subskill=weak_subskill,
-                confidence=hypo_json.get("confidence", 0.5),
-                gap_description=gap_description,
+                text            = parsed.get("hypothesis", ""),
+                subskill        = weak_subskill,
+                confidence      = parsed.get("confidence", 0.5),
+                gap_description = gap_description,
             )
-
-            logger.info(f"Generated hypothesis for {weak_subskill}: "
-                       f"confidence={hypothesis.confidence}")
+            logger.info(f"Generated hypothesis for {weak_subskill}: confidence={hypothesis.confidence}")
             return hypothesis
 
         except Exception as e:
@@ -254,43 +262,29 @@ class ExperimentEngine:
         self,
         hypothesis: Hypothesis,
     ) -> Optional[ExperimentType]:
-        """
-        仮説から最適な実験種別を選択
-
-        Args:
-            hypothesis: Hypothesis インスタンス
-
-        Returns:
-            ExperimentType（失敗時は None）
-        """
+        """仮説から最適な実験種別を選択"""
         if not self.tier1:
             logger.error("Tier1Engine not initialized")
             return None
 
         prompt = self.EXPERIMENT_TYPE_SELECTION_PROMPT_TEMPLATE.format(
-            hypothesis=hypothesis.text,
-            domain=self.domain,
-            subskill=hypothesis.subskill,
+            hypothesis = hypothesis.text,
+            domain     = self.domain,
+            subskill   = hypothesis.subskill,
         )
 
         try:
-            response = await self.tier1.chat(prompt)
-            response_text = response.get("text", "")
+            response_text = await self._call_tier1(prompt, max_tokens=256)
+            parsed = self._extract_json_from_text(response_text)
+            if not parsed:
+                logger.error("No JSON in type selection response")
+                return ExperimentType.A
 
-            # JSON抽出
-            import re
-            json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-            if not json_match:
-                logger.error(f"No JSON found in type selection response")
-                return None
-
-            type_json = json.loads(json_match.group())
-            exp_type_str = type_json.get("experiment_type", "A")  # デフォルトA
-
+            exp_type_str = parsed.get("experiment_type", "A")
             return ExperimentType[exp_type_str]
 
         except (KeyError, AttributeError):
-            logger.warning(f"Invalid experiment type selected, defaulting to A")
+            logger.warning("Invalid experiment type, defaulting to A")
             return ExperimentType.A
         except Exception as e:
             logger.error(f"Error selecting experiment type: {e}")
@@ -305,52 +299,33 @@ class ExperimentEngine:
         hypothesis: Hypothesis,
         experiment_type: ExperimentType,
     ) -> Optional[Dict]:
-        """
-        仮説と実験種別に基づいて実験手順を生成
-
-        Args:
-            hypothesis: Hypothesis インスタンス
-            experiment_type: 選択された実験種別
-
-        Returns:
-            {"procedure_prompt": ..., "expected_outcome": ..., "success_criteria": ...}
-            （失敗時は None）
-        """
+        """仮説と実験種別に基づいて実験手順を生成"""
         if not self.tier1:
             logger.error("Tier1Engine not initialized")
             return None
 
-        # 種別別パラメータ
         problem_count = 5 if experiment_type == ExperimentType.A else 3
 
         prompt = self.PROCEDURE_GENERATION_PROMPT_TEMPLATE.format(
-            hypothesis=hypothesis.text,
-            experiment_type=experiment_type.value,
-            domain=self.domain,
-            subskill=hypothesis.subskill,
-            problem_count=problem_count,
+            hypothesis      = hypothesis.text,
+            experiment_type = experiment_type.value,
+            domain          = self.domain,
+            subskill        = hypothesis.subskill,
+            problem_count   = problem_count,
         )
 
         try:
-            response = await self.tier1.chat(prompt)
-            response_text = response.get("text", "")
-
-            # JSON抽出
-            import re
-            json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-            if not json_match:
-                logger.error(f"No JSON found in procedure response")
+            response_text = await self._call_tier1(prompt)
+            parsed = self._extract_json_from_text(response_text)
+            if not parsed:
+                logger.error("No JSON in procedure response")
                 return None
 
-            procedure_json = json.loads(json_match.group())
-
             return {
-                "procedure_prompt": procedure_json.get("procedure_prompt", ""),
-                "expected_outcome": procedure_json.get("expected_outcome", ""),
-                "success_criteria": procedure_json.get("success_criteria", ""),
-                "estimated_duration_seconds": procedure_json.get(
-                    "estimated_duration_seconds", 300
-                ),
+                "procedure_prompt":           parsed.get("procedure_prompt", ""),
+                "expected_outcome":           parsed.get("expected_outcome", ""),
+                "success_criteria":           parsed.get("success_criteria", ""),
+                "estimated_duration_seconds": parsed.get("estimated_duration_seconds", 300),
             }
 
         except Exception as e:
@@ -367,41 +342,29 @@ class ExperimentEngine:
         gap_description: str,
         current_score: float,
     ) -> Optional[ExperimentPlan]:
-        """
-        仮説生成から実験計画まで一連のステップを実行
-
-        Returns:
-            ExperimentPlan インスタンス（失敗時は None）
-        """
-        # Step1: 仮説生成
-        hypothesis = await self.generate_hypothesis(
-            weak_subskill, gap_description, current_score
-        )
+        """仮説生成から実験計画まで一連のステップを実行"""
+        hypothesis = await self.generate_hypothesis(weak_subskill, gap_description, current_score)
         if not hypothesis:
             return None
 
-        # Step2: 実験種別選択
         exp_type = await self.select_experiment_type(hypothesis)
         if not exp_type:
-            exp_type = ExperimentType.A  # デフォルト
+            exp_type = ExperimentType.A
 
-        # Step2: 実験手順生成
         procedure_dict = await self.generate_experiment_procedure(hypothesis, exp_type)
         if not procedure_dict:
             return None
 
-        # 実験計画オブジェクト構築
         experiment_id = f"exp_{self.brain_id}_{datetime.now().isoformat()}"
 
         plan = ExperimentPlan(
-            experiment_id=experiment_id,
-            hypothesis=hypothesis,
-            experiment_type=exp_type,
-            subskill=weak_subskill,
-            procedure_prompt=procedure_dict["procedure_prompt"],
-            expected_outcome=procedure_dict["expected_outcome"],
-            success_criteria=procedure_dict["success_criteria"],
+            experiment_id   = experiment_id,
+            hypothesis      = hypothesis,
+            experiment_type = exp_type,
+            subskill        = weak_subskill,
+            procedure_prompt = procedure_dict["procedure_prompt"],
+            expected_outcome = procedure_dict["expected_outcome"],
+            success_criteria = procedure_dict["success_criteria"],
         )
-
         logger.info(f"Designed experiment: {experiment_id} ({exp_type.value})")
         return plan

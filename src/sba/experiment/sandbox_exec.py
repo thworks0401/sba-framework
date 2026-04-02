@@ -11,26 +11,32 @@
   - 実行時間制限: 30秒 (timeout)
   - 専用一時ディレクトリ
   - 外部ネットワークアクセス禁止（制限は OS レベル）
-  - ファイルWrite制限
+
+【修正履歴】
+  - vram_guard.acquire() → acquire_lock(ModelType.TIER3) に修正
+    （VRAMGuard の正しい public API）
+  - vram_guard.release() → release_lock(ModelType.TIER3) に修正
+  - self.tier3.chat(prompt) → self.tier3.generate_code(prompt) に修正
+    （Tier3Engine には chat() は存在せず generate_code() が正しいメソッド）
+  - response.get("text","") → result.text に修正
+    （戻り値は InferenceResult dataclass）
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import subprocess
 import tempfile
-import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from ..inference.tier3 import Tier3Engine
 from ..storage.experiment_db import ExperimentRepository
-from ..utils.vram_guard import VRAMGuard
-from .experiment_engine import ExperimentPlan, ExperimentType
+from ..utils.vram_guard import VRAMGuard, ModelType
+from .experiment_engine import ExperimentPlan
 from .experiment_runner import ExperimentResult, ExperimentRunResult
 
 
@@ -40,11 +46,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SandboxExecutionResult:
     """サンドボックス実行結果"""
-    stdout: str
-    stderr: str
-    return_code: int
+    stdout:                 str
+    stderr:                 str
+    return_code:            int
     execution_time_seconds: float
-    timed_out: bool = False
+    timed_out:              bool = False
 
 
 class SandboxExecutor:
@@ -90,48 +96,31 @@ class SandboxExecutor:
         vram_guard: Optional[VRAMGuard] = None,
         timeout_seconds: int = 30,
     ):
-        """
-        Args:
-            brain_id: Brain ID
-            tier3: Tier3Engine インスタンス
-            exp_repo: ExperimentRepository
-            vram_guard: VRAMGuard インスタンス
-            timeout_seconds: 実行タイムアウト秒数
-        """
-        self.brain_id = brain_id
-        self.tier3 = tier3
-        self.exp_repo = exp_repo
-        self.vram_guard = vram_guard
+        self.brain_id        = brain_id
+        self.tier3           = tier3
+        self.exp_repo        = exp_repo
+        self.vram_guard      = vram_guard
         self.timeout_seconds = timeout_seconds
 
-    async def run(
-        self,
-        plan: ExperimentPlan,
-    ) -> ExperimentRunResult:
-        """
-        種別C実験を実行
-
-        Args:
-            plan: ExperimentPlan
-
-        Returns:
-            ExperimentRunResult
-        """
+    async def run(self, plan: ExperimentPlan) -> ExperimentRunResult:
+        """種別C実験を実行"""
         start_time = datetime.now()
         result = ExperimentRunResult(
-            experiment_id=plan.experiment_id,
-            result=ExperimentResult.FAILURE,
-            score_change=0.0,
-            output_text="",
-            analysis_text="",
-            execution_time_seconds=0.0,
+            experiment_id          = plan.experiment_id,
+            result                 = ExperimentResult.FAILURE,
+            score_change           = 0.0,
+            output_text            = "",
+            analysis_text          = "",
+            execution_time_seconds = 0.0,
         )
 
-        # VRAM排他制御で Tier3 起動
+        # VRAM排他制御で Tier3 を起動
+        # 修正: acquire() → acquire_lock(ModelType.TIER3)
         if self.vram_guard:
-            acquired = self.vram_guard.acquire(timeout=self.timeout_seconds)
-            if not acquired:
-                result.error = "VRAM lock timeout"
+            try:
+                self.vram_guard.acquire_lock(ModelType.TIER3)
+            except Exception as e:
+                result.error = f"VRAM lock failed: {e}"
                 return result
 
         try:
@@ -143,28 +132,28 @@ class SandboxExecutor:
 
             # Step2: サンドボックス実行
             sandbox_result = await self._execute_in_sandbox(code)
-            result.output_text = sandbox_result.stdout
+            result.output_text   = sandbox_result.stdout
             result.analysis_text = f"Exit code: {sandbox_result.return_code}"
 
             if sandbox_result.stderr:
-                result.analysis_text += f"\nStderr: {sandbox_result.stderr}"
+                result.analysis_text += f"\nStderr: {sandbox_result.stderr[:500]}"
 
             # Step3: 結果判定
             if sandbox_result.timed_out:
-                result.result = ExperimentResult.FAILURE
+                result.result       = ExperimentResult.FAILURE
                 result.score_change = 0.0
-                result.error = "Execution timeout"
+                result.error        = "Execution timeout"
             elif sandbox_result.return_code == 0 and len(sandbox_result.stdout) > 0:
-                result.result = ExperimentResult.SUCCESS
+                result.result       = ExperimentResult.SUCCESS
                 result.score_change = 0.05
-            elif sandbox_result.return_code == 0 and len(sandbox_result.stderr) == 0:
-                result.result = ExperimentResult.SUCCESS
+            elif sandbox_result.return_code == 0:
+                result.result       = ExperimentResult.SUCCESS
                 result.score_change = 0.05
             elif sandbox_result.return_code != 0:
-                result.result = ExperimentResult.FAILURE
+                result.result       = ExperimentResult.FAILURE
                 result.score_change = 0.0
             else:
-                result.result = ExperimentResult.PARTIAL
+                result.result       = ExperimentResult.PARTIAL
                 result.score_change = 0.02
 
             result.execution_time_seconds = sandbox_result.execution_time_seconds
@@ -172,124 +161,109 @@ class SandboxExecutor:
 
         except Exception as e:
             logger.error(f"Error running code sandbox experiment: {e}")
-            result.error = str(e)
-            result.result = ExperimentResult.FAILURE
+            result.error                  = str(e)
             result.execution_time_seconds = (datetime.now() - start_time).total_seconds()
             return result
 
         finally:
-            # VRAM ロック解放
+            # 修正: release() → release_lock(ModelType.TIER3)
             if self.vram_guard:
-                self.vram_guard.release()
+                try:
+                    self.vram_guard.release_lock(ModelType.TIER3)
+                except Exception:
+                    pass  # ロック未取得の場合も安全に無視
 
     async def _generate_code(self, plan: ExperimentPlan) -> Optional[str]:
         """
-        Tier3 でコードを生成
+        Tier3 でコードを生成。
 
-        Returns:
-            Python コード文字列（失敗時は None）
+        修正: tier3.chat() は存在しない。
+             Tier3Engine の正しいメソッドは generate_code()。
+             戻り値は InferenceResult（.text でアクセス）。
         """
         prompt = self.CODE_GENERATION_PROMPT.format(
-            procedure_prompt=plan.procedure_prompt,
-            subskill=plan.subskill,
-            hypothesis=plan.hypothesis.text,
+            procedure_prompt = plan.procedure_prompt,
+            subskill         = plan.subskill,
+            hypothesis       = plan.hypothesis.text,
         )
 
         try:
-            response = await self.tier3.chat(prompt)
-            code_text = response.get("text", "")
+            # 修正: tier3.chat(prompt) → tier3.generate_code(prompt)
+            result    = await self.tier3.generate_code(prompt)
+            code_text = result.text or ""  # 修正: .get("text") → .text
 
-            # ```python ... ``` から抽出
-            code_match = re.search(
-                r"```python\n(.*?)\n```",
-                code_text,
-                re.DOTALL
-            )
-            if not code_match:
-                logger.warning("No code block found in response")
+            if result.error:
+                logger.error(f"Tier3 code generation error: {result.error}")
                 return None
 
-            code = code_match.group(1).strip()
-            if not code:
+            # generate_code() は既にコードブロック抽出済みだが念のため確認
+            if not code_text.strip():
+                logger.warning("Empty code returned from Tier3")
                 return None
 
-            logger.debug(f"Generated code ({len(code)} chars)")
-            return code
+            # もし ```python...``` ブロックが残っていた場合は除去
+            code_match = re.search(r"```python\n(.*?)\n```", code_text, re.DOTALL)
+            if code_match:
+                code_text = code_match.group(1).strip()
+
+            logger.debug(f"Generated code ({len(code_text)} chars)")
+            return code_text
 
         except Exception as e:
             logger.error(f"Error generating code with Tier3: {e}")
             return None
 
     async def _execute_in_sandbox(self, code: str) -> SandboxExecutionResult:
-        """
-        生成されたコードをサンドボックス実行
-
-        Args:
-            code: Python コード文字列
-
-        Returns:
-            SandboxExecutionResult
-        """
+        """生成されたコードをサンドボックス実行"""
         start_time = datetime.now()
 
-        # 一時ディレクトリでコード実行
         with tempfile.TemporaryDirectory() as tmpdir:
             script_path = Path(tmpdir) / "experiment.py"
 
-            # コードを一時ファイルに保存
             try:
                 script_path.write_text(code, encoding="utf-8")
             except Exception as e:
                 logger.error(f"Error writing temp script: {e}")
                 return SandboxExecutionResult(
-                    stdout="",
-                    stderr=f"Error writing script: {e}",
-                    return_code=-1,
-                    execution_time_seconds=(datetime.now() - start_time).total_seconds(),
-                    timed_out=False,
+                    stdout                 = "",
+                    stderr                 = f"Error writing script: {e}",
+                    return_code            = -1,
+                    execution_time_seconds = (datetime.now() - start_time).total_seconds(),
                 )
 
-            # subprocess で実行（タイムアウト付き）
             try:
                 proc = subprocess.Popen(
                     ["python", str(script_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    cwd=tmpdir,
-                    timeout=self.timeout_seconds,
+                    stdout  = subprocess.PIPE,
+                    stderr  = subprocess.PIPE,
+                    text    = True,
+                    cwd     = tmpdir,
                 )
-
-                stdout, stderr = proc.communicate()
-
-                execution_time = (datetime.now() - start_time).total_seconds()
+                stdout, stderr = proc.communicate(timeout=self.timeout_seconds)
 
                 return SandboxExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    return_code=proc.returncode,
-                    execution_time_seconds=execution_time,
-                    timed_out=False,
+                    stdout                 = stdout,
+                    stderr                 = stderr,
+                    return_code            = proc.returncode,
+                    execution_time_seconds = (datetime.now() - start_time).total_seconds(),
                 )
 
             except subprocess.TimeoutExpired:
-                logger.warning(
-                    f"Code execution timeout after {self.timeout_seconds}s"
-                )
+                proc.kill()
+                logger.warning(f"Code execution timeout after {self.timeout_seconds}s")
                 return SandboxExecutionResult(
-                    stdout="",
-                    stderr="Execution timeout",
-                    return_code=-1,
-                    execution_time_seconds=self.timeout_seconds,
-                    timed_out=True,
+                    stdout                 = "",
+                    stderr                 = "Execution timeout",
+                    return_code            = -1,
+                    execution_time_seconds = float(self.timeout_seconds),
+                    timed_out              = True,
                 )
 
             except Exception as e:
                 logger.error(f"Error executing code in sandbox: {e}")
                 return SandboxExecutionResult(
-                    stdout="",
-                    stderr=str(e),
-                    return_code=-1,
-                    execution_time_seconds=(datetime.now() - start_time).total_seconds(),
-                    timed_out=False,
+                    stdout                 = "",
+                    stderr                 = str(e),
+                    return_code            = -1,
+                    execution_time_seconds = (datetime.now() - start_time).total_seconds(),
                 )
