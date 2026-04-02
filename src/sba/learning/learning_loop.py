@@ -173,10 +173,14 @@ class LearningLoop:
 
             if self.resource_finder and result.step1_gap:
                 try:
-                    resources = await self.resource_finder.search_resources(
-                        result.step1_gap["target_subskill"],
-                        result.step1_gap["suggested_query"],
-                        is_tech_brain=self._is_tech_brain(manifest),
+                    # Add timeout to prevent hanging on network requests
+                    resources = await asyncio.wait_for(
+                        self.resource_finder.search_resources(
+                            result.step1_gap["target_subskill"],
+                            result.step1_gap["suggested_query"],
+                            is_tech_brain=self._is_tech_brain(manifest),
+                        ),
+                        timeout=5.0,  # 5 second timeout for resource search
                     )
                     ranker = getattr(self.resource_finder, "rank_candidates", None)
                     if callable(ranker):
@@ -185,6 +189,10 @@ class LearningLoop:
                             resources = ranked_resources
                     result.step2_resources = len(resources)
                     result.logs.append(f"Step2: resources={len(resources)}")
+                except asyncio.TimeoutError:
+                    # Resource search timeout - continue with no resources
+                    logger.warning("Step2 resource search timeout after 5s - continuing")
+                    result.logs.append("Step2: resource search timeout (5s)")
                 except Exception as e:
                     logger.error("Step2 failed: %s", e)
                     result.logs.append(f"Step2 error: {e}")
