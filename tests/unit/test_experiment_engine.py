@@ -7,27 +7,53 @@ T-4: Self-Experimentation Engine - ユニットテスト
 
 実行:
   pytest tests/unit/test_experiment_engine.py -v
+
+【修正履歴】
+  - tier1.chat の mock 戻り値を dict から InferenceResult に変更
+    （experiment_engine.py の _call_tier1() は result.text でアクセスする）
+  - tier3.generate_code の mock 戻り値を str から InferenceResult に変更
+    （sandbox_exec.py の _generate_code() は result.text / result.error でアクセスする）
 """
 
-import pytest
-import asyncio
+import json
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.sba.experiment.experiment_engine import (
-    ExperimentEngine, ExperimentType, Hypothesis
+    ExperimentEngine, ExperimentPlan, ExperimentType, Hypothesis,
 )
 from src.sba.experiment.experiment_runner import (
-    ExperimentRunnerA, ExperimentRunnerB, ExperimentRunnerD,
-    ExperimentResult
+    ExperimentResult,
+    ExperimentRunnerA,
+    ExperimentRunnerB,
+    ExperimentRunnerD,
 )
 from src.sba.experiment.sandbox_exec import SandboxExecutor
-from src.sba.inference.tier1 import Tier1Engine
-from src.sba.inference.tier3 import Tier3Engine
+from src.sba.inference.tier1 import InferenceResult as Tier1Result, Tier1Engine
+from src.sba.inference.tier3 import InferenceResult as Tier3Result, Tier3Engine
 from src.sba.storage.experiment_db import ExperimentRepository
 
+
+# ======================================================================
+# ヘルパー: InferenceResult を簡単に作るショートカット
+# ======================================================================
+
+def _t1(text: str) -> Tier1Result:
+    """Tier1 モック用の InferenceResult を生成"""
+    return Tier1Result(text=text, latency_ms=0.0)
+
+
+def _t3(text: str) -> Tier3Result:
+    """Tier3 モック用の InferenceResult を生成"""
+    return Tier3Result(text=text, latency_ms=0.0)
+
+
+# ======================================================================
+# 仮説生成・実験種別選択
+# ======================================================================
 
 class TestExperimentEngineHypothesis:
     """仮説生成のテスト"""
@@ -38,13 +64,12 @@ class TestExperimentEngineHypothesis:
         with tempfile.TemporaryDirectory() as tmpdir:
             brain_path = Path(tmpdir)
 
-            # モック Tier1
             tier1 = AsyncMock(spec=Tier1Engine)
-            tier1.chat.return_value = {
-                "text": '{"hypothesis": "if X then Y", "confidence": 0.8, "rationale": "reason"}'
-            }
+            # 修正: dict → Tier1Result
+            tier1.chat = AsyncMock(return_value=_t1(
+                '{"hypothesis": "if X then Y", "confidence": 0.8, "rationale": "reason"}'
+            ))
 
-            # ExperimentRepository ダミー
             exp_repo = MagicMock(spec=ExperimentRepository)
 
             engine = ExperimentEngine(
@@ -74,9 +99,10 @@ class TestExperimentEngineHypothesis:
             brain_path = Path(tmpdir)
 
             tier1 = AsyncMock(spec=Tier1Engine)
-            tier1.chat.return_value = {
-                "text": '{"experiment_type": "A", "reason": "knowledge check"}'
-            }
+            # 修正: dict → Tier1Result
+            tier1.chat = AsyncMock(return_value=_t1(
+                '{"experiment_type": "A", "reason": "knowledge check"}'
+            ))
 
             exp_repo = MagicMock(spec=ExperimentRepository)
 
@@ -102,21 +128,25 @@ class TestExperimentEngineHypothesis:
             tier1.chat.assert_called_once()
 
 
+# ======================================================================
+# 種別A: 知識確認実験
+# ======================================================================
+
 class TestExperimentRunnerA:
-    """実験種別A: 知識確認の テスト"""
+    """実験種別A: 知識確認のテスト"""
 
     @pytest.mark.asyncio
     async def test_experiment_a_success(self):
         """種別A（知識確認）が正常に実行できることを確認"""
         tier1 = AsyncMock(spec=Tier1Engine)
 
-        # 3段階のLLM呼び出しをシミュレート
-        responses = [
-            {"text": '{"problems": [{"id": 1, "text": "Q1"}, {"id": 2, "text": "Q2"}]}'},
-            {"text": '{"answers": [{"problem_id": 1, "answer": "A1"}, {"problem_id": 2, "answer": "A2"}]}'},
-            {"text": '{"scores": [{"problem_id": 1, "score": 1.0}, {"problem_id": 2, "score": 0.8}], "average_score": 0.9, "assessment": "success"}'},
-        ]
-        tier1.chat.side_effect = responses
+        # 修正: 3ステップの LLM 呼び出しを InferenceResult でシミュレート
+        tier1.chat = AsyncMock(side_effect=[
+            _t1('{"problems": [{"id": 1, "text": "Q1"}, {"id": 2, "text": "Q2"}]}'),
+            _t1('{"answers": [{"problem_id": 1, "answer": "A1"}, {"problem_id": 2, "answer": "A2"}]}'),
+            _t1('{"scores": [{"problem_id": 1, "score": 1.0}, {"problem_id": 2, "score": 0.8}], '
+                '"average_score": 0.9, "assessment": "success"}'),
+        ])
 
         exp_repo = MagicMock(spec=ExperimentRepository)
 
@@ -126,7 +156,6 @@ class TestExperimentRunnerA:
             exp_repo=exp_repo,
         )
 
-        from src.sba.experiment.experiment_engine import ExperimentPlan
         plan = ExperimentPlan(
             experiment_id="exp_001",
             hypothesis=Hypothesis(
@@ -149,16 +178,21 @@ class TestExperimentRunnerA:
         assert tier1.chat.call_count == 3
 
 
+# ======================================================================
+# サンドボックス実行（種別C）
+# ======================================================================
+
 class TestSandboxExecutor:
     """Code Experiment - サンドボックス実行のテスト"""
 
     @pytest.mark.asyncio
     async def test_code_generation_and_execution(self):
-        """コード生成とサンドボックス実行が正常に実行できることを確認"""
+        """コード生成とサンドボックス実行が正常に動作することを確認"""
         tier3 = AsyncMock(spec=Tier3Engine)
-        # Tier3Engine の generate_code をモック
-        tier3.generate_code.return_value = \
-            'print("Hello, World!")'
+        # 修正: str → Tier3Result（result.text / result.error でアクセスされる）
+        tier3.generate_code = AsyncMock(
+            return_value=_t3('print("Hello, World!")')
+        )
 
         exp_repo = MagicMock(spec=ExperimentRepository)
 
@@ -169,7 +203,6 @@ class TestSandboxExecutor:
             timeout_seconds=10,
         )
 
-        from src.sba.experiment.experiment_engine import ExperimentPlan
         plan = ExperimentPlan(
             experiment_id="exp_code_001",
             hypothesis=Hypothesis(
@@ -187,7 +220,6 @@ class TestSandboxExecutor:
 
         result = await executor.run(plan)
 
-        # 実行成功を確認
         assert result.result == ExperimentResult.SUCCESS
         assert "Hello, World!" in result.output_text
         assert result.execution_time_seconds > 0
@@ -196,8 +228,10 @@ class TestSandboxExecutor:
     async def test_sandbox_timeout_protection(self):
         """サンドボックスのタイムアウト保護が正常に動作することを確認"""
         tier3 = AsyncMock(spec=Tier3Engine)
-        tier3.generate_code.return_value = \
-            'import time\ntime.sleep(100)'
+        # 修正: str → Tier3Result
+        tier3.generate_code = AsyncMock(
+            return_value=_t3("import time\ntime.sleep(100)")
+        )
 
         exp_repo = MagicMock(spec=ExperimentRepository)
 
@@ -205,10 +239,9 @@ class TestSandboxExecutor:
             brain_id="test_brain",
             tier3=tier3,
             exp_repo=exp_repo,
-            timeout_seconds=2,  # 短いタイムアウト
+            timeout_seconds=2,
         )
 
-        from src.sba.experiment.experiment_engine import ExperimentPlan
         plan = ExperimentPlan(
             experiment_id="exp_timeout_001",
             hypothesis=Hypothesis(
@@ -226,29 +259,34 @@ class TestSandboxExecutor:
 
         result = await executor.run(plan)
 
-        # タイムアウト検出を確認
         assert result.result == ExperimentResult.FAILURE
-        assert "timeout" in result.error.lower() or result.execution_time_seconds >= 2
+        assert (
+            (result.error is not None and "timeout" in result.error.lower())
+            or result.execution_time_seconds >= 2
+        )
 
+
+# ======================================================================
+# 統合: 仮説生成 → 実験設計
+# ======================================================================
 
 class TestExperimentIntegration:
     """実験エンジン統合テスト"""
 
     @pytest.mark.asyncio
     async def test_full_experiment_cycle(self):
-        """仮説生成から実験実行までの完全サイクルを確認"""
+        """仮説生成から実験計画作成までの完全サイクルを確認"""
         with tempfile.TemporaryDirectory() as tmpdir:
             brain_path = Path(tmpdir)
 
             tier1 = AsyncMock(spec=Tier1Engine)
-            tier1.chat.side_effect = [
-                # 仮説生成
-                {"text": '{"hypothesis": "test", "confidence": 0.8, "rationale": "reason"}'},
-                # 種別選択
-                {"text": '{"experiment_type": "A", "reason": "knowledge"}'},
-                # 手順生成
-                {"text": '{"procedure_prompt": "proc", "expected_outcome": "exp", "success_criteria": "criteria"}'},
-            ]
+            # 修正: dict → Tier1Result（3ステップ分）
+            tier1.chat = AsyncMock(side_effect=[
+                _t1('{"hypothesis": "test", "confidence": 0.8, "rationale": "reason"}'),
+                _t1('{"experiment_type": "A", "reason": "knowledge"}'),
+                _t1('{"procedure_prompt": "proc", "expected_outcome": "exp", '
+                    '"success_criteria": "criteria", "estimated_duration_seconds": 300}'),
+            ])
 
             exp_repo = MagicMock(spec=ExperimentRepository)
 
