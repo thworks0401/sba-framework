@@ -11,6 +11,10 @@ T-8: Scheduler stability smoke tests.
       add_job() すると MemoryJobStore が未初期化で内部エラー → except で
       握り潰し → _registered_jobs に書かれない問題を修正。
       start() → register_* → get_job_list() → stop() の正しい順序に変更。
+  2026-04-03 (fix #3):
+    - BackgroundScheduler は start() 直後にバックグラウンドスレッドを起動する。
+      スレッドが完全に立ち上がる前に add_job() するとジョブが実行されない。
+      start() 後に sleep(0.3) を挟んでスレッド起動を待つ。
 """
 
 from __future__ import annotations
@@ -47,11 +51,14 @@ def test_scheduler_runs_repeating_jobs_and_stops_cleanly():
 
     _RUNS.clear()
 
-    # start() を先に呼ぶ（APScheduler 3.x は start() 後でないと add_job が安定しない）
     assert scheduler.start() is True
 
+    # BackgroundScheduler はスレッドで動く。
+    # start() 直後はスレッドが完全に起動していないため、
+    # add_job() 前に少し待ってスレッドの準備を確保する。
+    time.sleep(0.3)
+
     try:
-        # start() 後にジョブを追加
         scheduler.scheduler.add_job(
             record_scheduler_run,
             trigger=IntervalTrigger(seconds=1),
@@ -71,12 +78,6 @@ def test_scheduler_runs_repeating_jobs_and_stops_cleanly():
 def test_scheduler_registers_public_jobs():
     """
     公開ジョブ登録メソッドが全て正しく job_id を登録することを確認。
-
-    【修正】start() → register_* → get_job_list() → stop() の順序。
-    APScheduler 3.x の MemoryJobStore は start() 前に add_job() すると
-    内部で未初期化エラーが発生し except で握り潰されるため、
-    _registered_jobs に書き込まれず get_job_list() が空を返す。
-    start() してから登録することで安定動作を保証する。
     """
     scheduler = SBAScheduler(
         brain_id="test-brain",
@@ -86,18 +87,18 @@ def test_scheduler_registers_public_jobs():
 
     callback = lambda: None  # noqa: E731
 
-    # start() を先に呼ぶ（ここが修正の核心）
     assert scheduler.start() is True
 
+    # スレッド起動待ち（add_job の安定実行のため）
+    time.sleep(0.3)
+
     try:
-        # 各公開メソッドでジョブを登録
         scheduler.register_lightweight_experiment_job(callback)
         scheduler.register_medium_experiment_job(callback)
         scheduler.register_heavyweight_experiment_job(callback, run_hour=1)
         scheduler.register_learning_loop_job(callback, interval_minutes=120)
         scheduler.register_daily_counter_reset_job(callback)
 
-        # 登録済み job_id の一覧を取得
         job_ids = {job["id"] for job in scheduler.get_job_list()}
 
         expected = {

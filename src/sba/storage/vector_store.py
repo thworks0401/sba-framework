@@ -24,6 +24,14 @@ Brain Hot-Swap との相性:
     query_points() / search() どちらの API でも、
     結果が QueryResponse(.points) でも list でも正しく処理できるよう
     try/except + 統一ループに変更。
+
+  2026-04-03 (fix #3):
+    search() の API 呼び出し順序を変更。
+    旧来の client.search() を最優先 API として使用し、
+    AttributeError 時のみ query_points() にフォールバックする。
+    理由: テスト環境・本番環境問わず client.search() が最も互換性が高い。
+    query_points() は Qdrant client >= 1.7 のみ対応で、
+    ローカルモードの挙動が不安定なケースがある。
 """
 
 from __future__ import annotations
@@ -183,12 +191,10 @@ class QdrantVectorStore:
         """
         テキスト類似検索（オプション SubSkill フィルタ付き）。
 
-        【設計】
-            Qdrant クライアントのバージョンによって
-            query_points() と search() が混在する環境に対応するため
-            try/except で両方を試みる。
-            戻り値も QueryResponse(.points) と list の両方を
-            統一パターンで処理する。
+        【API 優先順位】
+          1. client.search()      - 旧来 API。最も互換性が高い。
+          2. client.query_points() - Qdrant client >= 1.7 の新 API。
+                                     ローカルモードで不安定なケースがあるため fallback。
 
         Args:
             query_text: クエリテキスト
@@ -219,50 +225,52 @@ class QdrantVectorStore:
                 ]
             )
 
-        # ---- Qdrant API 呼び出し（バージョン差異を吸収） ----
         raw_results = None
 
+        # --- 優先: client.search()（旧来 API・互換性最高）---
         try:
-            # Qdrant client >= 1.7 の新 API
-            response = self.client.query_points(
+            raw = self.client.search(
                 collection_name=self.collection_name,
-                query=query_vector_list,
+                query_vector=query_vector_list,
                 query_filter=filter_cond,
                 limit=limit,
                 score_threshold=score_threshold,
             )
-            # QueryResponse は .points を持つ
-            raw_results = response.points if hasattr(response, "points") else list(response)
-        except AttributeError:
-            pass
-        except Exception:
-            pass
+            # 戻り値は list[ScoredPoint] または .points 持ちオブジェクト
+            if hasattr(raw, "points"):
+                raw_results = raw.points
+            elif isinstance(raw, list):
+                raw_results = raw
+            else:
+                raw_results = list(raw)
+        except Exception as e_search:
+            raw_results = None
 
+        # --- フォールバック: client.query_points()（Qdrant >= 1.7）---
         if raw_results is None:
             try:
-                # 旧 API fallback
-                raw_results = self.client.search(
+                response = self.client.query_points(
                     collection_name=self.collection_name,
-                    query_vector=query_vector_list,
+                    query=query_vector_list,
                     query_filter=filter_cond,
                     limit=limit,
                     score_threshold=score_threshold,
                 )
-                # search() は list[ScoredPoint] を返す
-                if hasattr(raw_results, "points"):
-                    raw_results = raw_results.points
-                elif not isinstance(raw_results, list):
-                    raw_results = list(raw_results)
+                if hasattr(response, "points"):
+                    raw_results = response.points
+                elif isinstance(response, list):
+                    raw_results = response
+                else:
+                    raw_results = list(response)
             except Exception:
                 raw_results = []
 
         if raw_results is None:
             raw_results = []
 
-        # ---- 統一パース ----
+        # ---- 統一パース: ScoredPoint オブジェクトと dict の両方に対応 ----
         matches = []
         for result in raw_results:
-            # ScoredPoint オブジェクトと dict の両方に対応
             if hasattr(result, "payload"):
                 payload = result.payload or {}
                 score   = result.score
