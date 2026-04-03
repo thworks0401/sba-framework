@@ -1,0 +1,81 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-8.4.2, pluggy-1.6.0 -- C:\TH_Works\SBA\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\TH_Works\SBA
+configfile: pytest.ini
+plugins: anyio-4.13.0, asyncio-0.26.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 43 items
+
+tests/integration/test_hot_swap.py::test_hot_swap_round_trip PASSED      [  2%]
+tests/integration/test_hot_swap.py::test_hot_swap_keeps_active_brain_when_target_is_invalid PASSED [  4%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_single_learning_cycle_with_mocks PASSED [  6%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_cycle_logs_structure PASSED [  9%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_cycle_error_recovery PASSED [ 11%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_knowledge_update_flow PASSED [ 13%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_rate_limiter_initialization PASSED [ 16%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_within_limits PASSED [ 18%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_warning_threshold PASSED [ 20%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_throttle_threshold PASSED [ 23%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_auto_stop PASSED [ 25%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_youtube_api_tracking PASSED [ 27%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_api_resume_after_stop PASSED [ 30%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_status_report PASSED [ 32%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_usage_increment PASSED [ 34%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_multiple_increments PASSED [ 37%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_api_stops_management PASSED [ 39%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_daily_counter_isolation PASSED [ 41%]
+tests/integration/test_rate_limiter.py::TestRateLimitCycleIntegration::test_daily_reset_cycle PASSED [ 44%]
+tests/integration/test_rate_limiter.py::TestRateLimitCycleIntegration::test_multiple_api_tracking PASSED [ 46%]
+tests/integration/test_stability.py::test_scheduler_runs_repeating_jobs_and_stops_cleanly FAILED [ 48%]
+tests/integration/test_stability.py::test_scheduler_registers_public_jobs FAILED [ 51%]
+tests/unit/test_experiment_engine.py::TestExperimentEngineHypothesis::test_hypothesis_generation PASSED [ 53%]
+tests/unit/test_experiment_engine.py::TestExperimentEngineHypothesis::test_experiment_type_selection PASSED [ 55%]
+tests/unit/test_experiment_engine.py::TestExperimentRunnerA::test_experiment_a_success PASSED [ 58%]
+tests/unit/test_experiment_engine.py::TestSandboxExecutor::test_code_generation_and_execution PASSED [ 60%]
+tests/unit/test_experiment_engine.py::TestSandboxExecutor::test_sandbox_timeout_protection PASSED [ 62%]
+tests/unit/test_experiment_engine.py::TestExperimentIntegration::test_full_experiment_cycle PASSED [ 65%]
+tests/unit/test_inference.py::test_router_routes_code_tasks_to_tier3 PASSED [ 67%]
+tests/unit/test_inference.py::test_router_routes_long_text_to_tier2_when_quota_available PASSED [ 69%]
+tests/unit/test_inference.py::test_router_falls_back_to_tier1_when_tier2_quota_is_low PASSED [ 72%]
+tests/unit/test_inference.py::test_router_dispatches_to_selected_engine PASSED [ 74%]
+tests/unit/test_inference.py::test_vram_guard_blocks_incompatible_models PASSED [ 76%]
+tests/unit/test_inference.py::test_vram_guard_unloads_ollama_before_whisper PASSED [ 79%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep1::test_gap_detection_success PASSED [ 81%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep1::test_gap_detection_failure_handling PASSED [ 83%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep4::test_experiment_design_called PASSED [ 86%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep6::test_self_evaluation_updated PASSED [ 88%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep6::test_self_evaluation_empty_subskills PASSED [ 90%]
+tests/unit/test_learning_loop.py::TestLearningLoopCycleCompletion::test_single_cycle_completion PASSED [ 93%]
+tests/unit/test_learning_loop.py::TestLearningLoopCycleCompletion::test_cycle_result_has_cycle_id PASSED [ 95%]
+tests/unit/test_storage.py::test_store_query_and_duplicate_detection FAILED [ 97%]
+tests/unit/test_storage.py::test_mark_deprecated_and_review_flags PASSED [100%]
+
+================================== FAILURES ===================================
+____________ test_scheduler_runs_repeating_jobs_and_stops_cleanly _____________
+tests\integration\test_stability.py:68: in test_scheduler_runs_repeating_jobs_and_stops_cleanly
+    assert len(_RUNS) >= 2, f"ジョブが2回以上実行されなかった: {len(_RUNS)} 回"
+E   AssertionError: ジョブが2回以上実行されなかった: 0 回
+E   assert 0 >= 2
+E    +  where 0 = len([])
+____________________ test_scheduler_registers_public_jobs _____________________
+tests\integration\test_stability.py:103: in test_scheduler_registers_public_jobs
+    assert not missing, f"以下のジョブIDが登録されていない: {missing}\n登録済み: {job_ids}"
+E   AssertionError: 以下のジョブIDが登録されていない: {'job_learning_loop', 'job_lightweight_exp', 'job_daily_counter_reset', 'job_heavyweight_exp', 'job_medium_exp'}
+E     登録済み: set()
+E   assert not {'job_learning_loop', 'job_lightweight_exp', 'job_daily_counter_reset', 'job_heavyweight_exp', 'job_medium_exp'}
+__________________ test_store_query_and_duplicate_detection ___________________
+tests\unit\test_storage.py:104: in test_store_query_and_duplicate_detection
+    assert results, "query_hybrid が空を返した: Qdrant/Kuzu の書き込みに問題がある可能性"
+E   AssertionError: query_hybrid が空を返した: Qdrant/Kuzu の書き込みに問題がある可能性
+E   assert []
+=========================== short test summary info ===========================
+FAILED tests/integration/test_stability.py::test_scheduler_runs_repeating_jobs_and_stops_cleanly - AssertionError: ジョブが2回以上実行されなかった: 0 回
+assert 0 >= 2
+ +  where 0 = len([])
+FAILED tests/integration/test_stability.py::test_scheduler_registers_public_jobs - AssertionError: 以下のジョブIDが登録されていない: {'job_learning_loop', 'job_lightweight_exp', 'job_daily_counter_reset', 'job_heavyweight_exp', 'job_medium_exp'}
+  登録済み: set()
+assert not {'job_learning_loop', 'job_lightweight_exp', 'job_daily_counter_reset', 'job_heavyweight_exp', 'job_medium_exp'}
+FAILED tests/unit/test_storage.py::test_store_query_and_duplicate_detection - AssertionError: query_hybrid が空を返した: Qdrant/Kuzu の書き込みに問題がある可能性
+assert []
+======================== 3 failed, 40 passed in 6.73s =========================

@@ -1,0 +1,441 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.2, pluggy-1.6.0 -- C:\TH_Works\ai_company\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\TH_Works\SBA
+configfile: pytest.ini
+plugins: anyio-4.13.0
+collecting ... collected 43 items
+
+tests/integration/test_hot_swap.py::test_hot_swap_round_trip PASSED      [  2%]
+tests/integration/test_hot_swap.py::test_hot_swap_keeps_active_brain_when_target_is_invalid PASSED [  4%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_single_learning_cycle_with_mocks FAILED [  6%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_cycle_logs_structure FAILED [  9%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_cycle_error_recovery FAILED [ 11%]
+tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_knowledge_update_flow FAILED [ 13%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_rate_limiter_initialization PASSED [ 16%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_within_limits PASSED [ 18%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_warning_threshold PASSED [ 20%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_throttle_threshold PASSED [ 23%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_gemini_api_auto_stop PASSED [ 25%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_youtube_api_tracking PASSED [ 27%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_api_resume_after_stop PASSED [ 30%]
+tests/integration/test_rate_limiter.py::TestAPIRateLimiter::test_status_report PASSED [ 32%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_usage_increment PASSED [ 34%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_multiple_increments PASSED [ 37%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_api_stops_management PASSED [ 39%]
+tests/integration/test_rate_limiter.py::TestAPIUsageRepository::test_daily_counter_isolation PASSED [ 41%]
+tests/integration/test_rate_limiter.py::TestRateLimitCycleIntegration::test_daily_reset_cycle PASSED [ 44%]
+tests/integration/test_rate_limiter.py::TestRateLimitCycleIntegration::test_multiple_api_tracking PASSED [ 46%]
+tests/integration/test_stability.py::test_scheduler_runs_repeating_jobs_and_stops_cleanly FAILED [ 48%]
+tests/integration/test_stability.py::test_scheduler_registers_public_jobs FAILED [ 51%]
+tests/unit/test_experiment_engine.py::TestExperimentEngineHypothesis::test_hypothesis_generation FAILED [ 53%]
+tests/unit/test_experiment_engine.py::TestExperimentEngineHypothesis::test_experiment_type_selection FAILED [ 55%]
+tests/unit/test_experiment_engine.py::TestExperimentRunnerA::test_experiment_a_success FAILED [ 58%]
+tests/unit/test_experiment_engine.py::TestSandboxExecutor::test_code_generation_and_execution FAILED [ 60%]
+tests/unit/test_experiment_engine.py::TestSandboxExecutor::test_sandbox_timeout_protection FAILED [ 62%]
+tests/unit/test_experiment_engine.py::TestExperimentIntegration::test_full_experiment_cycle FAILED [ 65%]
+tests/unit/test_inference.py::test_router_routes_code_tasks_to_tier3 PASSED [ 67%]
+tests/unit/test_inference.py::test_router_routes_long_text_to_tier2_when_quota_available PASSED [ 69%]
+tests/unit/test_inference.py::test_router_falls_back_to_tier1_when_tier2_quota_is_low FAILED [ 72%]
+tests/unit/test_inference.py::test_router_dispatches_to_selected_engine FAILED [ 74%]
+tests/unit/test_inference.py::test_vram_guard_blocks_incompatible_models PASSED [ 76%]
+tests/unit/test_inference.py::test_vram_guard_unloads_ollama_before_whisper PASSED [ 79%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep1::test_gap_detection_success FAILED [ 81%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep1::test_gap_detection_failure_handling FAILED [ 83%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep4::test_experiment_design_called FAILED [ 86%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep6::test_self_evaluation_updated FAILED [ 88%]
+tests/unit/test_learning_loop.py::TestLearningLoopStep6::test_self_evaluation_empty_subskills FAILED [ 90%]
+tests/unit/test_learning_loop.py::TestLearningLoopCycleCompletion::test_single_cycle_completion FAILED [ 93%]
+tests/unit/test_learning_loop.py::TestLearningLoopCycleCompletion::test_cycle_result_has_cycle_id FAILED [ 95%]
+tests/unit/test_storage.py::test_store_query_and_duplicate_detection FAILED [ 97%]
+tests/unit/test_storage.py::test_mark_deprecated_and_review_flags FAILED [100%]
+
+================================== FAILURES ===================================
+_________ TestFullLearningCycle.test_single_learning_cycle_with_mocks _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________ TestFullLearningCycle.test_cycle_logs_structure _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________ TestFullLearningCycle.test_cycle_error_recovery _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ TestFullLearningCycle.test_knowledge_update_flow _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________ test_scheduler_runs_repeating_jobs_and_stops_cleanly _____________
+tests\integration\test_stability.py:48: in test_scheduler_runs_repeating_jobs_and_stops_cleanly
+    assert len(_RUNS) >= 2
+E   assert 0 >= 2
+E    +  where 0 = len([])
+____________________ test_scheduler_registers_public_jobs _____________________
+tests\integration\test_stability.py:68: in test_scheduler_registers_public_jobs
+    assert {
+E   AssertionError: assert False
+E    +  where False = <built-in method issubset of set object at 0x000001A7FE715EE0>(set())
+E    +    where <built-in method issubset of set object at 0x000001A7FE715EE0> = {'job_daily_counter_reset', 'job_medium_exp', 'job_learning_loop', 'job_heavyweight_exp', 'job_lightweight_exp'}.issubset
+__________ TestExperimentEngineHypothesis.test_hypothesis_generation __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________ TestExperimentEngineHypothesis.test_experiment_type_selection ________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________ TestExperimentRunnerA.test_experiment_a_success _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________ TestSandboxExecutor.test_code_generation_and_execution ____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ TestSandboxExecutor.test_sandbox_timeout_protection _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________ TestExperimentIntegration.test_full_experiment_cycle _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________ test_router_falls_back_to_tier1_when_tier2_quota_is_low ___________
+tests\unit\test_inference.py:93: in test_router_falls_back_to_tier1_when_tier2_quota_is_low
+    assert "fallback" in decision.reason.lower()
+E   AssertionError: assert 'fallback' in 'tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af'
+E    +  where 'tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af' = <built-in method lower of str object at 0x000001A7EA25E230>()
+E    +    where <built-in method lower of str object at 0x000001A7EA25E230> = 'Tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 Tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af'.lower
+E    +      where 'Tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 Tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af' = RoutingDecision(selected_tier=<SelectedTier.TIER1: 'tier1'>, reason='Tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 Tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af', estimated_wait_time_s=1.5).reason
+__________________ test_router_dispatches_to_selected_engine __________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ TestLearningLoopStep1.test_gap_detection_success _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________ TestLearningLoopStep1.test_gap_detection_failure_handling __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ TestLearningLoopStep4.test_experiment_design_called _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ TestLearningLoopStep6.test_self_evaluation_updated ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________ TestLearningLoopStep6.test_self_evaluation_empty_subskills __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________ TestLearningLoopCycleCompletion.test_single_cycle_completion _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______ TestLearningLoopCycleCompletion.test_cycle_result_has_cycle_id ________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________ test_store_query_and_duplicate_detection ___________________
+tests\unit\test_storage.py:73: in test_store_query_and_duplicate_detection
+    assert results
+E   assert []
+____________________ test_mark_deprecated_and_review_flags ____________________
+tests\unit\test_storage.py:93: in test_mark_deprecated_and_review_flags
+    assert chunk["requires_human_review"] is True
+E   AssertionError: assert <MagicMock name='mock().execute().get_all().__getitem__().__getitem__().__getitem__()' id='1821058256144'> is True
+============================== warnings summary ===============================
+..\ai_company\.venv\Lib\site-packages\_pytest\config\__init__.py:1428
+  C:\TH_Works\ai_company\.venv\Lib\site-packages\_pytest\config\__init__.py:1428: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+tests\integration\test_learning_cycle.py:64
+  C:\TH_Works\SBA\tests\integration\test_learning_cycle.py:64: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\integration\test_learning_cycle.py:165
+  C:\TH_Works\SBA\tests\integration\test_learning_cycle.py:165: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\integration\test_learning_cycle.py:192
+  C:\TH_Works\SBA\tests\integration\test_learning_cycle.py:192: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\integration\test_learning_cycle.py:224
+  C:\TH_Works\SBA\tests\integration\test_learning_cycle.py:224: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_experiment_engine.py:61
+  C:\TH_Works\SBA\tests\unit\test_experiment_engine.py:61: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_experiment_engine.py:95
+  C:\TH_Works\SBA\tests\unit\test_experiment_engine.py:95: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_experiment_engine.py:138
+  C:\TH_Works\SBA\tests\unit\test_experiment_engine.py:138: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_experiment_engine.py:188
+  C:\TH_Works\SBA\tests\unit\test_experiment_engine.py:188: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_experiment_engine.py:227
+  C:\TH_Works\SBA\tests\unit\test_experiment_engine.py:227: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_experiment_engine.py:276
+  C:\TH_Works\SBA\tests\unit\test_experiment_engine.py:276: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_inference.py:96
+  C:\TH_Works\SBA\tests\unit\test_inference.py:96: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:105
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:105: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:138
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:138: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:168
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:168: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:207
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:207: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:261
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:261: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:303
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:303: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests\unit\test_learning_loop.py:326
+  C:\TH_Works\SBA\tests\unit\test_learning_loop.py:326: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_single_learning_cycle_with_mocks - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_cycle_logs_structure - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_cycle_error_recovery - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_learning_cycle.py::TestFullLearningCycle::test_knowledge_update_flow - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_stability.py::test_scheduler_runs_repeating_jobs_and_stops_cleanly - assert 0 >= 2
+ +  where 0 = len([])
+FAILED tests/integration/test_stability.py::test_scheduler_registers_public_jobs - AssertionError: assert False
+ +  where False = <built-in method issubset of set object at 0x000001A7FE715EE0>(set())
+ +    where <built-in method issubset of set object at 0x000001A7FE715EE0> = {'job_daily_counter_reset', 'job_medium_exp', 'job_learning_loop', 'job_heavyweight_exp', 'job_lightweight_exp'}.issubset
+FAILED tests/unit/test_experiment_engine.py::TestExperimentEngineHypothesis::test_hypothesis_generation - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_experiment_engine.py::TestExperimentEngineHypothesis::test_experiment_type_selection - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_experiment_engine.py::TestExperimentRunnerA::test_experiment_a_success - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_experiment_engine.py::TestSandboxExecutor::test_code_generation_and_execution - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_experiment_engine.py::TestSandboxExecutor::test_sandbox_timeout_protection - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_experiment_engine.py::TestExperimentIntegration::test_full_experiment_cycle - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_inference.py::test_router_falls_back_to_tier1_when_tier2_quota_is_low - AssertionError: assert 'fallback' in 'tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af'
+ +  where 'tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af' = <built-in method lower of str object at 0x000001A7EA25E230>()
+ +    where <built-in method lower of str object at 0x000001A7EA25E230> = 'Tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 Tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af'.lower
+ +      where 'Tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 Tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af' = RoutingDecision(selected_tier=<SelectedTier.TIER1: 'tier1'>, reason='Tier2\u30af\u30aa\u30fc\u30bf\u4e0d\u8db3 \u2192 Tier1\u306b\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af', estimated_wait_time_s=1.5).reason
+FAILED tests/unit/test_inference.py::test_router_dispatches_to_selected_engine - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopStep1::test_gap_detection_success - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopStep1::test_gap_detection_failure_handling - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopStep4::test_experiment_design_called - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopStep6::test_self_evaluation_updated - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopStep6::test_self_evaluation_empty_subskills - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopCycleCompletion::test_single_cycle_completion - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_learning_loop.py::TestLearningLoopCycleCompletion::test_cycle_result_has_cycle_id - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/unit/test_storage.py::test_store_query_and_duplicate_detection - assert []
+FAILED tests/unit/test_storage.py::test_mark_deprecated_and_review_flags - AssertionError: assert <MagicMock name='mock().execute().get_all().__getitem__().__getitem__().__getitem__()' id='1821058256144'> is True
+================= 23 failed, 20 passed, 19 warnings in 4.33s ==================

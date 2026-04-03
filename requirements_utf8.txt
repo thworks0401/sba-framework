@@ -1,0 +1,50 @@
+# SBA Framework — 依存ライブラリ全量
+# 補足設計書 §2.4 に基づく確定版
+# pip install -r requirements.txt --break-system-packages
+
+# ========== Core ==========
+pydantic>=2.9.2
+typer[all]>=0.12.5
+pyyaml>=6.0.2
+python-dotenv>=1.0.0
+numpy>=2.0.0
+
+# ========== Storage ==========
+qdrant-client>=1.9.0       # Vector DB（ローカルモード）補足設計書§1.2.1
+kuzu>=0.6.0                # Graph DB（組み込み型）補足設計書§1.2.2
+sqlalchemy>=2.0.0          # APScheduler SQLite JobStore
+
+# ========== Embedding ==========
+sentence-transformers>=3.4.0   # BAAI/bge-m3 用 補足設計書§1.2.3
+
+# ========== Scheduler ==========
+apscheduler>=3.10.0        # 自律実行スケジューラ（Phase 5）設計書A-9
+
+# ========== Web / Fetch ==========
+playwright>=1.43.0         # JavaScript レンダリング対応ブラウザ自動化
+beautifulsoup4>=4.12.0     # HTML パース
+httpx>=0.27.0              # 非同期 HTTP クライアント
+aiohttp>=3.10.0            # Fetcher 実装用 HTTP クライアント
+duckduckgo-search>=5.0.0   # 無料ウェブ検索 API
+
+# ========== Document / PDF ==========
+pdfminer.six>=20221105     # PDF テキスト抽出
+pypdf>=4.0.0               # PDF 操作
+arxiv>=2.1.0               # arXiv 論文取得
+feedparser>=6.0.0          # arXiv フィード解析
+
+# ========== Video / Audio ==========
+yt-dlp>=2024.5.0           # YouTube 動画・字幕取得
+faster-whisper>=1.0.0      # 音声→テキスト変換（CTranslate2 版）補足設計書§1.2.4
+
+# ========== Inference ==========
+ollama>=0.6.0              # Ollama Python クライアント
+google-generativeai>=0.8.0 # Gemini API クライアント
+
+# ========== Logging ==========
+loguru>=0.7.0              # 構造化ログ
+tqdm>=4.66.0               # プログレスバー
+
+# ========== Notification（Phase 5） ==========
+plyer>=2.1.0               # Windows デスクトップ通知 補足設計書§3.3
+
