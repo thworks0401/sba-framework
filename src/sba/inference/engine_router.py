@@ -4,27 +4,34 @@ EngineRouter: タスク種別・VRAM状態・Quota状態に基づく推論エン
 設計根拠（推論エンジン・VRAM運用設定書 §4.1）:
 
   Tier振り分けロジック:
-    Tier3 (Qwen2.5-Coder): task_type="code" のコード生成・検証タスク
+    Tier3 (Qwen2.5-Coder): CODE_GENERATION / CODE_REVIEW タスク
     Tier2 (Gemini Flash):  長文テキスト（token > 8000）かつ Quota 残量あり
                            Tier1 待機時間 > 10秒 のフォールバック
     Tier1 (Phi-4:14B):     上記以外のデフォルト。最も汎用・高品質な推論
 
   フォールバックチェーン:
-    Tier3 エラー   → Tier1 にフォールバック
+    Tier3 エラー    → Tier1 にフォールバック
     Tier2 Quota切れ → Tier1 にフォールバック
     Tier1 タイムアウト → エラー返却（Tier2 への再フォールバックは行わない）
 
   VRAM排他:
-    各エンジン呼び出しを vram_guard.acquire_vram() でラップ。
+    各エンジン呼び出しを acquire_vram() でラップ。
     Tier2 は外部API なので VRAM ロック不要。
+
+  変更履歴:
+    v2.0: InferenceTask / TaskType / SelectedTier / RoutingDecision を追加。
+          route(task) メソッドを追加。
+          infer() のシグネチャを InferenceTask ベースに変更。
 """
 
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 from typing import Optional, Literal
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from .tier1 import Tier1Engine, InferenceResult
 from .tier2 import Tier2Engine
@@ -32,25 +39,103 @@ from .tier3 import Tier3Engine
 from .vram_guard import acquire_vram
 
 
-# タスク種別の型定義
-TaskType = Literal["code", "text", "summary", "eval", "default"]
+# ===========================================================================
+# タスク種別 Enum
+# ===========================================================================
 
-# Tier2 に回す入力トークンの閾値（文字数 ÷ 4 がおおよそのトークン数）
+class TaskType(str, Enum):
+    """推論タスクの種別。ルーティング判定に使用する。"""
+    CODE_GENERATION = "code_generation"  # コード生成 → Tier3
+    CODE_REVIEW     = "code_review"      # コードレビュー → Tier3
+    LONG_TEXT       = "long_text"        # 長文テキスト → Tier2 候補
+    SUMMARIZATION   = "summarization"    # 要約 → Tier2 候補
+    REASONING       = "reasoning"        # 推論・評価 → Tier1
+    EVAL            = "eval"             # 自己評価 → Tier1
+    DEFAULT         = "default"          # デフォルト → Tier1
+
+
+# ===========================================================================
+# 選択 Tier Enum
+# ===========================================================================
+
+class SelectedTier(str, Enum):
+    """route() が返す選択 Tier。"""
+    TIER1 = "tier1"
+    TIER2 = "tier2"
+    TIER3 = "tier3"
+
+
+# ===========================================================================
+# InferenceTask: ルーター入力モデル
+# ===========================================================================
+
+class InferenceTask(BaseModel):
+    """
+    EngineRouter に渡す推論タスク定義。
+
+    Attributes:
+        type:             タスク種別（TaskType Enum）
+        prompt:           入力プロンプト文字列
+        estimated_tokens: 推定入力トークン数（ルーティング判定に使用）
+        is_tech_brain:    技術系 Brain かどうか（コードタスク判定補助）
+        max_output_tokens: 最大生成トークン数
+        temperature:      サンプリング温度
+        timeout_s:        タイムアウト秒数
+    """
+    type: TaskType = TaskType.DEFAULT
+    prompt: str
+    estimated_tokens: int = 0
+    is_tech_brain: bool = False
+    max_output_tokens: int = 2048
+    temperature: float = 0.7
+    timeout_s: float = 30.0
+
+
+# ===========================================================================
+# RoutingDecision: route() の戻り値
+# ===========================================================================
+
+class RoutingDecision(BaseModel):
+    """
+    route() が返すルーティング判定結果。
+
+    Attributes:
+        selected_tier: 選択された Tier（SelectedTier Enum）
+        reason:        選択理由（ログ・デバッグ用の日本語説明）
+    """
+    selected_tier: SelectedTier
+    reason: str
+
+
+# ===========================================================================
+# 定数
+# ===========================================================================
+
+# Tier2 に回す入力トークンの閾値
 TIER2_TOKEN_THRESHOLD = 8000
 
 # Tier1 の待機時間上限（秒）。超えたら Tier2 フォールバック候補
 TIER1_WAIT_THRESHOLD_S = 10.0
 
+# コードタスクとして扱う TaskType セット
+_CODE_TASK_TYPES = {TaskType.CODE_GENERATION, TaskType.CODE_REVIEW}
+
+# 長文タスクとして扱う TaskType セット
+_LONG_TEXT_TASK_TYPES = {TaskType.LONG_TEXT, TaskType.SUMMARIZATION}
+
+
+# ===========================================================================
+# EngineRouter
+# ===========================================================================
 
 class EngineRouter:
     """
     推論エンジンの振り分けルーター。
 
     Tier1 / Tier2 / Tier3 を内部で管理し、
-    タスク種別・トークン量・VRAM状態・Quota状態に応じて
-    最適なエンジンに推論リクエストを転送する。
+    InferenceTask の内容に応じて最適なエンジンに推論リクエストを転送する。
 
-    Tier2 はAPIキー必須のため、キーが取得できない場合は
+    Tier2 は APIキー必須のため、キーが取得できない場合は
     Tier2 なしで動作する（Tier1 + Tier3 のみ）。
     """
 
@@ -83,132 +168,130 @@ class EngineRouter:
                 self.tier2 = None
 
     # ======================================================================
-    # ルーティング判定
+    # ルーティング判定（同期）
     # ======================================================================
 
-    def _select_engine(
-        self,
-        prompt: str,
-        task_type: TaskType,
-        force_tier: Optional[Literal[1, 2, 3]] = None,
-    ) -> Literal["tier1", "tier2", "tier3"]:
+    def route(self, task: InferenceTask) -> RoutingDecision:
         """
-        タスク種別・プロンプト長・Quota状態からエンジンを選択。
+        InferenceTask を受け取り、どの Tier で処理するかを判定して返す。
 
         Args:
-            prompt:     入力プロンプト文字列
-            task_type:  タスク種別
-            force_tier: 強制指定（テスト・上書き用）
+            task: InferenceTask インスタンス
 
         Returns:
-            "tier1" | "tier2" | "tier3"
+            RoutingDecision（selected_tier + reason）
         """
-        if force_tier == 1:
-            return "tier1"
-        if force_tier == 2:
-            return "tier2"
-        if force_tier == 3:
-            return "tier3"
-
         # --- コードタスク → Tier3 ---
-        if task_type == "code":
-            logger.debug("EngineRouter: code task → Tier3")
-            return "tier3"
+        if task.type in _CODE_TASK_TYPES:
+            logger.debug(f"EngineRouter.route: {task.type} → Tier3")
+            return RoutingDecision(
+                selected_tier=SelectedTier.TIER3,
+                reason=f"コードタスク ({task.type.value}) のため Tier3 (Qwen2.5-Coder) を選択",
+            )
 
         # --- 長文テキスト → Tier2（Quota あり）---
-        estimated_tokens = len(prompt) // 4
         if (
-            task_type in ("summary", "text")
-            and estimated_tokens > TIER2_TOKEN_THRESHOLD
+            task.type in _LONG_TEXT_TASK_TYPES
+            and task.estimated_tokens > TIER2_TOKEN_THRESHOLD
             and self.tier2 is not None
         ):
-            # Quota 残量確認
             quota = self.tier2.get_remaining_quota()
-            if quota["status"] == "active":
+            if quota.get("status") == "active":
                 logger.debug(
-                    f"EngineRouter: long text ({estimated_tokens} tokens) → Tier2"
+                    f"EngineRouter.route: long text ({task.estimated_tokens} tokens) → Tier2"
                 )
-                return "tier2"
+                return RoutingDecision(
+                    selected_tier=SelectedTier.TIER2,
+                    reason=(
+                        f"長文タスク ({task.estimated_tokens} tokens > {TIER2_TOKEN_THRESHOLD}) "
+                        f"かつ Tier2 Quota 有効のため Tier2 (Gemini) を選択"
+                    ),
+                )
             else:
                 logger.info(
-                    f"EngineRouter: Tier2 quota={quota['status']}, "
-                    f"falling back to Tier1"
+                    f"EngineRouter.route: Tier2 quota={quota.get('status')}, Tier1 へフォールバック"
+                )
+                return RoutingDecision(
+                    selected_tier=SelectedTier.TIER1,
+                    reason=(
+                        f"長文タスクだが Tier2 Quota 枯渇 (status={quota.get('status')})。"
+                        f"Tier1 へフォールバック"
+                    ),
                 )
 
         # --- Tier1 待機時間チェック ---
         # 直前の待機時間が閾値超過 かつ Tier2 が使えるなら Tier2 へ
-        if (
-            self.tier1.latest_wait_time > TIER1_WAIT_THRESHOLD_S
-            and self.tier2 is not None
-        ):
+        tier1_wait = self._get_tier1_wait_time()
+        if tier1_wait > TIER1_WAIT_THRESHOLD_S and self.tier2 is not None:
             quota = self.tier2.get_remaining_quota()
-            if quota["status"] == "active":
+            if quota.get("status") == "active":
                 logger.info(
-                    f"EngineRouter: Tier1 wait {self.tier1.latest_wait_time:.1f}s > "
+                    f"EngineRouter.route: Tier1 wait {tier1_wait:.1f}s > "
                     f"{TIER1_WAIT_THRESHOLD_S}s → Tier2 fallback"
                 )
-                return "tier2"
+                return RoutingDecision(
+                    selected_tier=SelectedTier.TIER2,
+                    reason=(
+                        f"Tier1 待機時間 {tier1_wait:.1f}s > {TIER1_WAIT_THRESHOLD_S}s のため "
+                        f"Tier2 (Gemini) へフォールバック"
+                    ),
+                )
 
         # --- デフォルト: Tier1 ---
-        return "tier1"
+        return RoutingDecision(
+            selected_tier=SelectedTier.TIER1,
+            reason="デフォルト Tier1 (Phi-4) を選択",
+        )
 
-    # ======================================================================
-    # 推論実行
-    # ======================================================================
-
-    async def infer(
-        self,
-        prompt: str,
-        task_type: TaskType = "default",
-        max_tokens: int = 2048,
-        temperature: float = 0.7,
-        timeout_s: float = 30.0,
-        force_tier: Optional[Literal[1, 2, 3]] = None,
-    ) -> InferenceResult:
+    def _get_tier1_wait_time(self) -> float:
         """
-        推論を実行。エンジン選択 → VRAM排他 → 推論 → フォールバック の順で処理。
+        Tier1 の直前待機時間を取得。
+        MagicMock / 実装の両方に対応するため、
+        get_latest_wait_time() メソッドと latest_wait_time 属性の両方を試みる。
+        """
+        # テスト用 MagicMock / 新実装は get_latest_wait_time() を持つ
+        if callable(getattr(self.tier1, "get_latest_wait_time", None)):
+            return self.tier1.get_latest_wait_time()
+        # 旧実装は latest_wait_time 属性
+        return getattr(self.tier1, "latest_wait_time", 0.0)
+
+    # ======================================================================
+    # 推論実行（InferenceTask ベース）
+    # ======================================================================
+
+    async def infer(self, task: InferenceTask) -> InferenceResult:
+        """
+        InferenceTask を受け取り推論を実行する。
+        route() でエンジンを選択し、VRAM排他制御を経て推論を行う。
 
         Args:
-            prompt:     入力プロンプト
-            task_type:  タスク種別 ("code" / "text" / "summary" / "eval" / "default")
-            max_tokens: 最大生成トークン数
-            temperature: サンプリング温度
-            timeout_s:  タイムアウト秒数
-            force_tier: エンジン強制指定（1/2/3）
+            task: InferenceTask インスタンス
 
         Returns:
             InferenceResult
         """
-        selected = self._select_engine(prompt, task_type, force_tier)
+        decision = self.route(task)
 
-        if selected == "tier3":
-            return await self._run_tier3(
-                prompt, max_tokens, temperature, timeout_s
-            )
-        elif selected == "tier2":
-            return await self._run_tier2(
-                prompt, max_tokens, temperature, timeout_s
-            )
+        if decision.selected_tier == SelectedTier.TIER3:
+            return await self._run_tier3(task)
+        elif decision.selected_tier == SelectedTier.TIER2:
+            return await self._run_tier2(task)
         else:
-            return await self._run_tier1(
-                prompt, max_tokens, temperature, timeout_s
-            )
+            return await self._run_tier1(task)
 
-    async def _run_tier1(
-        self,
-        prompt: str,
-        max_tokens: int,
-        temperature: float,
-        timeout_s: float,
-    ) -> InferenceResult:
+    # ======================================================================
+    # 各 Tier 実行（内部）
+    # ======================================================================
+
+    async def _run_tier1(self, task: InferenceTask) -> InferenceResult:
         """Tier1 (Phi-4) で推論。VRAM ロック取得してから呼び出す。"""
         try:
             with acquire_vram("tier1"):
                 result = await self.tier1.infer(
-                    prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout_s=timeout_s,
+                    task.prompt,
+                    temperature=task.temperature,
+                    max_tokens=task.max_output_tokens,
+                    timeout_s=task.timeout_s,
                 )
             return result
         except TimeoutError as e:
@@ -218,23 +301,17 @@ class EngineRouter:
                 error=f"Tier1 VRAM lock timeout: {e}"
             )
 
-    async def _run_tier2(
-        self,
-        prompt: str,
-        max_tokens: int,
-        temperature: float,
-        timeout_s: float,
-    ) -> InferenceResult:
+    async def _run_tier2(self, task: InferenceTask) -> InferenceResult:
         """Tier2 (Gemini) で推論。外部APIなので VRAM ロック不要。"""
         if self.tier2 is None:
             logger.warning("EngineRouter: Tier2 unavailable, falling back to Tier1")
-            return await self._run_tier1(prompt, max_tokens, temperature, timeout_s)
+            return await self._run_tier1(task)
 
         result = await self.tier2.infer(
-            prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout_s=timeout_s,
+            task.prompt,
+            max_tokens=task.max_output_tokens,
+            temperature=task.temperature,
+            timeout_s=task.timeout_s,
         )
 
         # Quota 切れ・エラー時は Tier1 にフォールバック
@@ -242,25 +319,20 @@ class EngineRouter:
             logger.warning(
                 f"EngineRouter: Tier2 error, falling back to Tier1. error={result.error}"
             )
-            return await self._run_tier1(prompt, max_tokens, temperature, timeout_s)
+            return await self._run_tier1(task)
 
         return result
 
-    async def _run_tier3(
-        self,
-        prompt: str,
-        max_tokens: int,
-        temperature: float,
-        timeout_s: float,
-    ) -> InferenceResult:
+    async def _run_tier3(self, task: InferenceTask) -> InferenceResult:
         """Tier3 (Qwen2.5-Coder) で推論。VRAM ロック取得してから呼び出す。"""
         try:
             with acquire_vram("tier3"):
-                result = await self.tier3.infer(
-                    prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    timeout_s=timeout_s,
+                # Tier3 はコード生成専用メソッドを使う
+                result = await self.tier3.generate_code(
+                    task.prompt,
+                    max_tokens=task.max_output_tokens,
+                    temperature=task.temperature,
+                    timeout_s=task.timeout_s,
                 )
         except TimeoutError as e:
             logger.error(f"EngineRouter: Tier3 VRAM lock timeout: {e}")
@@ -274,7 +346,7 @@ class EngineRouter:
             logger.warning(
                 f"EngineRouter: Tier3 error, falling back to Tier1. error={result.error}"
             )
-            return await self._run_tier1(prompt, max_tokens, temperature, timeout_s)
+            return await self._run_tier1(task)
 
         return result
 
@@ -288,10 +360,10 @@ class EngineRouter:
 
         Returns:
             {
-                "tier1_wait_time":  float,  # 直前の Tier1 待機時間（秒）
-                "tier2_available":  bool,   # Tier2 が使用可能か
-                "tier2_quota":      dict,   # Tier2 Quota 状態
-                "tier3_available":  bool,   # Tier3 が使用可能か
+                "tier1_wait_time":  float,
+                "tier2_available":  bool,
+                "tier2_quota":      dict,
+                "tier3_available":  bool,
             }
         """
         tier2_quota: dict = {"status": "unavailable"}
@@ -302,7 +374,7 @@ class EngineRouter:
                 pass
 
         return {
-            "tier1_wait_time": self.tier1.latest_wait_time,
+            "tier1_wait_time": self._get_tier1_wait_time(),
             "tier2_available": self.tier2 is not None,
             "tier2_quota":     tier2_quota,
             "tier3_available": self.tier3 is not None,
