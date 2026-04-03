@@ -1,0 +1,51 @@
+[
+  {
+    "id": "P0-ROOT",
+    "name": "プロジェクトルート存在確認",
+    "status": "PASS",
+    "details": "ProjectRoot が存在する: C:\\TH_Works\\SBA",
+    "evidence": "C:\\TH_Works\\SBA"
+  },
+  {
+    "id": "P0-01",
+    "name": "Python 3.11 確認",
+    "status": "PASS",
+    "details": "Python 3.11.9 を確認",
+    "evidence": "3.11.9"
+  },
+  {
+    "id": "P0-02",
+    "name": "venv 環境確認",
+    "status": "PASS",
+    "details": ".venv と python.exe を確認。バージョン: 3.11.9",
+    "evidence": "C:\\TH_Works\\SBA\\.venv\\Scripts\\python.exe"
+  },
+  {
+    "id": "P0-03",
+    "name": "依存定義ファイル確認",
+    "status": "PASS",
+    "details": "requirements.txt / requirements-dev.txt / pyproject.toml を確認",
+    "evidence": ""
+  },
+  {
+    "id": "P0-09",
+    "name": "基本ディレクトリ構造確認",
+    "status": "PASS",
+    "details": "主要ディレクトリ一式を確認",
+    "evidence": ""
+  },
+  {
+    "id": "P0-10",
+    "name": "設定ファイル確認",
+    "status": "PASS",
+    "details": "sba_config.yaml を確認: C:\\TH_Works\\SBA\\sba_config.yaml / .env も確認: C:\\TH_Works\\SBA\\.env",
+    "evidence": "C:\\TH_Works\\SBA\\sba_config.yaml | C:\\TH_Works\\SBA\\.env"
+  },
+  {
+    "id": "P0-15",
+    "name": "既存 Phase0 検証スクリプト確認",
+    "status": "PASS",
+    "details": "既存の SBA_Phase0_Verify.ps1 を確認",
+    "evidence": "C:\\TH_Works\\SBA\\SBA_Phase0_Verify.ps1"
+  }
+]

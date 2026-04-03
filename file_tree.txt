@@ -1,0 +1,352 @@
+========================================
+SBA Framework - File Tree
+========================================
+生成日時 : 2026/04/02 14:52:50
+スキャン : C:\TH_Works\SBA
+========================================
+
+C:\TH_Works\SBA/
+├── .aider.tags.cache.v4/
+│   └── cache.db [100.0KB]
+├── .claude/
+│   └── settings.local.json [200B]
+├── .vscode/
+│   └── settings.json [42B]
+├── brain_bank/
+│   ├── _blank_template/
+│   ├── [active]/
+│   ├── blank_template/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [303B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [47B]
+│   ├── FinanceAgent_v1/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [322B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [47B]
+│   ├── Python_Dev_v1.0/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [319B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [44B]
+│   ├── Python_Development_v1.0/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [411B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [58B]
+│   ├── PythonDev_Phase1/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [334B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [58B]
+│   ├── Python開発_v1.0/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [329B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [52B]
+│   ├── T01_Success/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [319B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [48B]
+│   ├── T02_Corrupted/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [14B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [48B]
+│   ├── T02_Initial/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [319B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [48B]
+│   ├── T04_Brain1/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [317B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [47B]
+│   ├── T04_Brain2/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [317B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [47B]
+│   ├── T05_Concurrent1/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [322B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [47B]
+│   ├── T05_Concurrent2/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [324B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [49B]
+│   ├── Tech_v1.0/
+│   │   ├── knowledge_graph/
+│   │   ├── vector_index/
+│   │   ├── brain.db [0B]
+│   │   ├── data.json [41B]
+│   │   ├── experiment_log.db [0B]
+│   │   ├── learning_timeline.db [0B]
+│   │   ├── metadata.json [396B]
+│   │   ├── self_eval.json [136B]
+│   │   └── subskill_manifest.json [44B]
+│   └── Tech_v1.1/
+│       ├── knowledge_graph/
+│       │   └── kuzu.db [16.0KB]
+│       ├── vector_index/
+│       │   ├── collection/
+│       │   │   └── brain_49f5db0c-51bd-4aed-9be1-ae926dbf259f/
+│       │   │       └── storage.sqlite [12.0KB]
+│       │   ├── .lock [13B]
+│       │   └── meta.json [543B]
+│       ├── brain.db [0B]
+│       ├── data.json [41B]
+│       ├── experiment_log.db [28.0KB]
+│       ├── learning_timeline.db [36.0KB]
+│       ├── metadata.json [396B]
+│       ├── self_eval.json [136B]
+│       └── subskill_manifest.json [44B]
+├── config/
+│   └── sba.config.example.yaml [0B]
+├── data/
+│   ├── api_usage.db [32.0KB]
+│   ├── scheduler_jobs.db [16.0KB]
+│   ├── schema.sql [4.3KB]
+│   ├── test_exp.db [28.0KB]
+│   └── test_experiment.db [28.0KB]
+├── docs/
+│   └── spec/
+│       ├── 00.設定書類一覧.md [1.0KB]
+│       ├── 01.SBA総合基本設計書.md [34.2KB]
+│       ├── 02.SBAコンセプト・境界設定書.md [13.4KB]
+│       ├── 03.Brain Hot-Swap設定書.md [13.9KB]
+│       ├── 04.Brain内部構造設定書.md [12.5KB]
+│       ├── 05.SubSkill体系設定書.md [13.0KB]
+│       ├── 06.自律学習ループ設定書.md [14.2KB]
+│       ├── 07.学習ソース・収集方針設定書.md [13.8KB]
+│       ├── 08.自己実験エンジン設定書.md [11.8KB]
+│       ├── 09.推論エンジン・VRAM運用設定書.md [10.3KB]
+│       ├── 10.Brain Package・保存形式設定書.md [13.1KB]
+│       ├── 11.エクスポート・外部利用仕様書.md [11.0KB]
+│       ├── 12.成長評価・Lv定義設定書.md [8.3KB]
+│       ├── 13.コスト・レート制限運用書.md [11.3KB]
+│       ├── 14.育成ドメインカタログ・テンプレート設計書.md [9.8KB]
+│       ├── 15.SBA_補足設計書_v1.0.md [30.1KB]
+│       ├── 16.SBA_タスクスケジュール_v1.0.md [26.0KB]
+│       └── README.md [0B]
+├── domains/
+│   ├── academic/
+│   ├── creative/
+│   ├── ec/
+│   ├── finance/
+│   ├── investment/
+│   ├── legal/
+│   ├── marketing/
+│   ├── mgmt/
+│   ├── pm/
+│   ├── saas/
+│   ├── sales/
+│   ├── tax/
+│   └── tech/
+├── exports/
+├── logs/
+│   ├── experiments.log [0B]
+│   ├── learning_loop.log [0B]
+│   └── sba.log [0B]
+├── scripts/
+│   └── phase0_external_dependency_check.ps1 [8.5KB]
+├── src/
+│   ├── sba/
+│   │   ├── brain/
+│   │   │   ├── __init__.py [1.0KB]
+│   │   │   ├── blank_template.py [10.1KB]
+│   │   │   ├── brain_manager.py [21.8KB]
+│   │   │   └── brain_package.py [20.5KB]
+│   │   ├── cli/
+│   │   │   ├── __init__.py [35B]
+│   │   │   └── brain_cmds.py [15.0KB]
+│   │   ├── cost/
+│   │   │   ├── __init__.py [181B]
+│   │   │   └── rate_limiter.py [12.8KB]
+│   │   ├── experiment/
+│   │   │   ├── __init__.py [206B]
+│   │   │   ├── experiment_engine.py [14.1KB]
+│   │   │   ├── experiment_runner.py [17.5KB]
+│   │   │   └── sandbox_exec.py [10.5KB]
+│   │   ├── inference/
+│   │   │   ├── __init__.py [571B]
+│   │   │   ├── engine_router.py [7.6KB]
+│   │   │   ├── tier1.py [9.7KB]
+│   │   │   ├── tier2.py [9.5KB]
+│   │   │   └── tier3.py [7.3KB]
+│   │   ├── learning/
+│   │   │   ├── __init__.py [771B]
+│   │   │   ├── gap_detector.py [11.1KB]
+│   │   │   ├── knowledge_integrator.py [12.9KB]
+│   │   │   ├── learning_loop.py [35.1KB]
+│   │   │   ├── resource_finder.py [18.3KB]
+│   │   │   └── self_evaluator.py [8.7KB]
+│   │   ├── scheduler/
+│   │   │   ├── __init__.py [315B]
+│   │   │   └── scheduler.py [19.6KB]
+│   │   ├── sources/
+│   │   │   ├── __init__.py [1.1KB]
+│   │   │   ├── code_fetcher.py [19.1KB]
+│   │   │   ├── pdf_fetcher.py [10.0KB]
+│   │   │   ├── video_fetcher.py [13.6KB]
+│   │   │   ├── web_fetcher.py [10.3KB]
+│   │   │   └── whisper_transcriber.py [9.6KB]
+│   │   ├── storage/
+│   │   │   ├── __init__.py [76B]
+│   │   │   ├── api_usage_db.py [14.5KB]
+│   │   │   ├── experiment_db.py [6.2KB]
+│   │   │   ├── graph_store.py [14.3KB]
+│   │   │   ├── knowledge_store.py [15.8KB]
+│   │   │   ├── timeline_db.py [9.4KB]
+│   │   │   └── vector_store.py [9.5KB]
+│   │   ├── subskill/
+│   │   │   ├── __init__.py [228B]
+│   │   │   └── classifier.py [9.9KB]
+│   │   ├── utils/
+│   │   │   ├── chunker.py [10.8KB]
+│   │   │   ├── embedder.py [3.9KB]
+│   │   │   ├── notifier.py [11.8KB]
+│   │   │   └── vram_guard.py [6.6KB]
+│   │   ├── __init__.py [160B]
+│   │   ├── __main__.py [3.1KB]
+│   │   └── config.py [7.1KB]
+│   ├── sba_core/
+│   │   ├── brain/
+│   │   ├── cli/
+│   │   ├── io/
+│   │   └── learning/
+│   ├── sba.egg-info/
+│   │   ├── dependency_links.txt [1B]
+│   │   ├── entry_points.txt [42B]
+│   │   ├── PKG-INFO [314B]
+│   │   ├── requires.txt [127B]
+│   │   ├── SOURCES.txt [542B]
+│   │   └── top_level.txt [19B]
+│   └── tools/
+├── tests/
+│   ├── fixtures/
+│   │   └── __init__.py [0B]
+│   ├── integration/
+│   │   ├── __init__.py [0B]
+│   │   ├── test_hot_swap.py [2.4KB]
+│   │   ├── test_learning_cycle.py [9.6KB]
+│   │   ├── test_rate_limiter.py [8.6KB]
+│   │   └── test_stability.py [1.9KB]
+│   ├── unit/
+│   │   ├── __init__.py [0B]
+│   │   ├── test_experiment_engine.py [10.9KB]
+│   │   ├── test_inference.py [3.7KB]
+│   │   ├── test_learning_loop.py [9.0KB]
+│   │   └── test_storage.py [2.8KB]
+│   ├── __init__.py [0B]
+│   ├── conftest.py [6.7KB]
+│   ├── integration_test_task_1_1.py [10.6KB]
+│   ├── test_blank_template.py [2.1KB]
+│   ├── test_brain_list.py [849B]
+│   ├── test_brain_manager.py [4.4KB]
+│   ├── test_brain_package.py [8.4KB]
+│   ├── test_cli_integration.py [12.5KB]
+│   ├── test_error_handling.py [11.1KB]
+│   ├── test_phase_1_final.py [11.2KB]
+│   ├── test_phase_comprehensive.py [10.0KB]
+│   ├── test_phase_final_validation.py [8.8KB]
+│   ├── test_phase1_integration.py [12.2KB]
+│   ├── test_phase2_storage.py [8.3KB]
+│   ├── test_phase4.py [6.5KB]
+│   └── test_phase5_single_cycle.py [8.5KB]
+├── .aider.chat.history.md [8.4KB]
+├── .aider.input.history [1.7KB]
+├── .env [167B]
+├── .gitignore [549B]
+├── CODEBASE_INVENTORY_SUMMARY.md [8.2KB]
+├── CODEBASE_INVENTORY.md [28.0KB]
+├── file_tree.txt [234B]
+├── IMPLEMENTATION_ANALYSIS.md [14.9KB]
+├── IMPLEMENTATION_RESPONSE_TO_USER.md [9.7KB]
+├── IMPLEMENTATION_ROADMAP.md [26.4KB]
+├── PHASE_2_5_IMPLEMENTATION_STATUS.md [7.1KB]
+├── PHASE_5_COMPLETION_CHECKLIST.md [3.6KB]
+├── PHASE_5_COMPLETION_VERIFIED.md [8.9KB]
+├── pyproject.toml [1.0KB]
+├── pytest.ini [419B]
+├── README.md [36B]
+├── requirements-dev.txt [94B]
+├── requirements.txt [1.9KB]
+├── sba_config.yaml [1.3KB]
+├── SBA_Phase0_Verify.ps1 [35.2KB]
+├── test_single_cycle.py [1011B]
+└── TESTING.md [5.7KB]
+
+========================================
+サマリ: ディレクトリ 2677 個 / ファイル 29641 個
+========================================

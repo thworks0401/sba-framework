@@ -1,0 +1,20 @@
+                                                                               
+ Usage: python -m sba [OPTIONS] COMMAND [ARGS]...                              
+                                                                               
+ SBA Framework - Self-Learning Brain Agent                                     
+                                                                               
++- Options -------------------------------------------------------------------+
+| --install-completion          Install completion for the current shell.     |
+| --show-completion             Show completion for the current shell, to     |
+|                               copy it or customize the installation.        |
+| --help                        Show this message and exit.                   |
++-----------------------------------------------------------------------------+
++- Commands ------------------------------------------------------------------+
+| version  Show SBA version                                                   |
+| config   Show SBA configuration (loaded from sba_config.yaml)               |
+| status   Show system status                                                 |
+| daemon   自律学習ループを常時稼働させる。                                   |
+| brain    Brain hot-swap management                                          |
++-----------------------------------------------------------------------------+
+
+

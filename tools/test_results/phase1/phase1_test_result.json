@@ -1,0 +1,65 @@
+[
+  {
+    "id": "P1-00",
+    "name": "Phase 0 結果依存確認",
+    "status": "PASS",
+    "details": "Phase 0 に FAIL がないため Phase 1 テスト前提を満たす",
+    "evidence": "C:\\TH_Works\\SBA\\test_results\\phase0\\phase0_test_result.json"
+  },
+  {
+    "id": "P1-01",
+    "name": "Phase 1 実装ファイル確認",
+    "status": "PASS",
+    "details": "Brain 管理基盤の主要コードとテストファイルを確認",
+    "evidence": ""
+  },
+  {
+    "id": "P1-02",
+    "name": "brain_bank 構造確認",
+    "status": "PASS",
+    "details": "template=C:\\TH_Works\\SBA\\brain_bank\\_blank_template, C:\\TH_Works\\SBA\\brain_bank\\blank_template / active=C:\\TH_Works\\SBA\\brain_bank\\[active] / saved brains=14",
+    "evidence": "C:\\TH_Works\\SBA\\brain_bank"
+  },
+  {
+    "id": "P1-03",
+    "name": "Brain Package メタデータ確認",
+    "status": "PASS",
+    "details": "保存済み Brain の基本構成を確認",
+    "evidence": "14 brains"
+  },
+  {
+    "id": "P1-04",
+    "name": "Phase 1 Python import 確認",
+    "status": "PASS",
+    "details": "Phase 1 の主要モジュール import 成功",
+    "evidence": "C:\\TH_Works\\SBA\\test_results\\phase1\\phase1_import_check.json"
+  },
+  {
+    "id": "P1-05",
+    "name": "CLI エントリポイント確認",
+    "status": "PASS",
+    "details": "__main__.py に Typer / brain 系エントリの痕跡を確認",
+    "evidence": "C:\\TH_Works\\SBA\\src\\sba\\__main__.py"
+  },
+  {
+    "id": "P1-06",
+    "name": "CLI スモークテスト",
+    "status": "PASS",
+    "details": "python -m sba --help 実行成功。brain サブコマンド表記を確認",
+    "evidence": "C:\\TH_Works\\SBA\\test_results\\phase1\\phase1_cli_help.txt"
+  },
+  {
+    "id": "P1-07",
+    "name": "pytest 構成確認",
+    "status": "PASS",
+    "details": "Phase 1 関連 pytest ファイル群を確認",
+    "evidence": "C:\\TH_Works\\SBA\\pytest.ini"
+  },
+  {
+    "id": "P1-08",
+    "name": "Hot-Swap 疑似書込テスト",
+    "status": "SKIP",
+    "details": "-RunSandboxWriteTest 未指定のためスキップ",
+    "evidence": ""
+  }
+]
