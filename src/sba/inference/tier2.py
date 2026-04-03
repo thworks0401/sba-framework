@@ -8,11 +8,16 @@ Tier2 推論エンジン（Gemini 2.5 Flash @ Google API）
   - 用途: 大量テキスト処理・長文要約・Tier1フォールバック
   - 残枠チェック: api_usage.db から残量確認、100以下で呼び出し拒否
 
-【修正履歴】
-  旧実装: api_usage_db_path のデフォルトが "C:/SBA/data/api_usage.db" のハードコード。
-  新実装: SBAConfig.load_env() から cfg.data を取得してパスを解決するように変更。
-          SBAConfig がロードできない環境では GEMINI_API_KEY 環境変数のみで動作する
-          フォールバックパスも保持。
+【SDK 移行】
+  旧: google-generativeai (google.generativeai) → EOL 宣言済み
+  新: google-genai (google.genai) に完全移行
+  参考: https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  API の変化点:
+    - クライアント: genai.Client(api_key=...) に変更
+    - 推論: client.models.generate_content(model=..., contents=..., config=...) に変更
+    - GenerationConfig: types.GenerateContentConfig に変更
+    - usage_metadata フィールド名は同じ（candidates_token_count）
 """
 
 from __future__ import annotations
@@ -25,7 +30,8 @@ from typing import Optional
 from dataclasses import dataclass
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 from ..storage.api_usage_db import APIUsageRepository
 from ..config import SBAConfig
@@ -52,7 +58,7 @@ class Tier2Engine:
     APIレート管理は api_usage.db（SBAConfig.data 配下）と連携。
     """
 
-    MODEL_NAME            = "gemini-2.5-flash"
+    MODEL_NAME            = "gemini-2.5-flash-preview-04-17"
     API_NAME              = "gemini"
     MIN_TOKENS_THRESHOLD  = 100   # 残トークン 100 以下で Tier1 フォールバック
 
@@ -76,8 +82,8 @@ class Tier2Engine:
                 "環境変数 GEMINI_API_KEY または sba_config.yaml の api_keys.gemini に設定してください。"
             )
 
-        genai.configure(api_key=self.api_key)
-        self.client = genai.GenerativeModel(self.MODEL_NAME)
+        # google-genai SDK: Client インスタンスを生成
+        self.client = genai.Client(api_key=self.api_key)
 
         # --- API 使用量 DB パス解決 ---
         resolved_db_path = api_usage_db_path or self._resolve_db_path()
@@ -91,12 +97,10 @@ class Tier2Engine:
           1. 環境変数 GEMINI_API_KEY
           2. sba_config.yaml の api_keys.gemini
         """
-        # 環境変数優先
         env_key = os.getenv("GEMINI_API_KEY")
         if env_key:
             return env_key
 
-        # sba_config.yaml フォールバック
         try:
             cfg = SBAConfig.load_env()
             if cfg.api_keys.gemini:
@@ -116,7 +120,6 @@ class Tier2Engine:
             cfg = SBAConfig.load_env()
             return str(cfg.data / "api_usage.db")
         except Exception:
-            # SBAConfig が使えない環境（テスト等）向けのフォールバック
             return "C:/TH_Works/SBA/data/api_usage.db"
 
     # ======================================================================
@@ -160,24 +163,29 @@ class Tier2Engine:
         try:
             start_time = time.time()
 
-            response = self.client.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            # google-genai SDK の新しい呼び出し方式
+            # client.models.generate_content() を使用
+            response = self.client.models.generate_content(
+                model=self.MODEL_NAME,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
                     max_output_tokens=max_tokens,
                     temperature=temperature,
                 ),
-                request_options={"timeout": timeout_s},
             )
 
             latency = time.time() - start_time
             self._latest_latency = latency
 
+            # レスポンステキスト取得（新SDKも .text プロパティは同じ）
             text = response.text.strip() if response.text else ""
 
-            # トークン計測
+            # トークン計測（新SDKも usage_metadata は同じ構造）
             tokens_used = None
-            if hasattr(response, "usage_metadata"):
-                tokens_used = response.usage_metadata.candidates_token_count
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                tokens_used = getattr(
+                    response.usage_metadata, "candidates_token_count", None
+                )
 
             # APIレート記録
             estimated_input  = len(prompt.split()) + len(prompt) // 4

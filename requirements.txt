@@ -39,7 +39,7 @@ faster-whisper>=1.0.0      # 音声→テキスト変換（CTranslate2 版）補
 
 # ========== Inference ==========
 ollama>=0.6.0              # Ollama Python クライアント
-google-generativeai>=0.8.0 # Gemini API クライアント
+google-genai>=1.0.0        # Gemini API クライアント（新 SDK: google.genai）
 
 # ========== Logging ==========
 loguru>=0.7.0              # 構造化ログ
