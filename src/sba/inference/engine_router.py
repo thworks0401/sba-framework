@@ -23,6 +23,9 @@ EngineRouter: タスク種別・VRAM状態・Quota状態に基づく推論エン
           route(task) メソッドを追加。
     v2.1: infer() に互潤性を持たせる。
           InferenceTask オブジェクト OR 旧記述形式 (str, task_type=, force_tier=) の両方を受け付ける。
+    v2.2: _get_tier1_wait_time() の型チェック修正。
+          MagicMock で isinstance check が通過してまった問題を修正。
+          callable() だけでなく、常に float にキャストして比較する。
 """
 
 from __future__ import annotations
@@ -125,7 +128,6 @@ _CODE_TASK_TYPES = {TaskType.CODE_GENERATION, TaskType.CODE_REVIEW}
 _LONG_TEXT_TASK_TYPES = {TaskType.LONG_TEXT, TaskType.SUMMARIZATION}
 
 # 旧記述形式の task_type 文字列 → TaskType マッピング
-# test_engine_router.py が "code" / "summary" / "default" 等の形式で呼ぶため
 _LEGACY_TASK_TYPE_MAP: dict[str, TaskType] = {
     "code":          TaskType.CODE_GENERATION,
     "code_review":   TaskType.CODE_REVIEW,
@@ -157,9 +159,6 @@ class EngineRouter:
 
     Tier1 / Tier2 / Tier3 を内部で管理し、
     InferenceTask の内容に応じて最適なエンジンに推論リクエストを転送する。
-
-    Tier2 は APIキー必須のため、キーが取得できない場合は
-    Tier2 なしで動作する（Tier1 + Tier3 のみ）。
     """
 
     def __init__(
@@ -168,12 +167,6 @@ class EngineRouter:
         tier2: Optional[Tier2Engine] = None,
         tier3: Optional[Tier3Engine] = None,
     ) -> None:
-        """
-        Args:
-            tier1: Tier1Engine インスタンス（省略時: 自動生成）
-            tier2: Tier2Engine インスタンス（省略時: 自動生成、失敗時は None）
-            tier3: Tier3Engine インスタンス（省略時: 自動生成）
-        """
         self.tier1: Tier1Engine = tier1 or Tier1Engine()
         self.tier3: Tier3Engine = tier3 or Tier3Engine()
 
@@ -196,16 +189,9 @@ class EngineRouter:
     def route(self, task: InferenceTask) -> RoutingDecision:
         """
         InferenceTask を受け取り、どの Tier で処理するかを判定して返す。
-
-        Args:
-            task: InferenceTask インスタンス
-
-        Returns:
-            RoutingDecision（selected_tier + reason）
         """
         # --- コードタスク → Tier3 ---
         if task.type in _CODE_TASK_TYPES:
-            logger.debug(f"EngineRouter.route: {task.type} → Tier3")
             return RoutingDecision(
                 selected_tier=SelectedTier.TIER3,
                 reason=f"コードタスク ({task.type.value}) のため Tier3 (Qwen2.5-Coder) を選択",
@@ -219,9 +205,6 @@ class EngineRouter:
         ):
             quota = self.tier2.get_remaining_quota()
             if quota.get("status") == "active":
-                logger.debug(
-                    f"EngineRouter.route: long text ({task.estimated_tokens} tokens) → Tier2"
-                )
                 return RoutingDecision(
                     selected_tier=SelectedTier.TIER2,
                     reason=(
@@ -230,9 +213,6 @@ class EngineRouter:
                     ),
                 )
             else:
-                logger.info(
-                    f"EngineRouter.route: Tier2 quota={quota.get('status')}, Tier1 へフォールバック"
-                )
                 return RoutingDecision(
                     selected_tier=SelectedTier.TIER1,
                     reason=(
@@ -246,10 +226,6 @@ class EngineRouter:
         if tier1_wait > TIER1_WAIT_THRESHOLD_S and self.tier2 is not None:
             quota = self.tier2.get_remaining_quota()
             if quota.get("status") == "active":
-                logger.info(
-                    f"EngineRouter.route: Tier1 wait {tier1_wait:.1f}s > "
-                    f"{TIER1_WAIT_THRESHOLD_S}s → Tier2 fallback"
-                )
                 return RoutingDecision(
                     selected_tier=SelectedTier.TIER2,
                     reason=(
@@ -266,12 +242,34 @@ class EngineRouter:
 
     def _get_tier1_wait_time(self) -> float:
         """
-        Tier1 の直前待機時間を取得。
-        get_latest_wait_time() メソッドと latest_wait_time 属性の両方に対応する。
+        Tier1 の待機時間を float で返す。
+
+        実オブジェクトは get_latest_wait_time() メソッド or latest_wait_time 属性を持つ。
+        Mock オブジェクトは属性アクセスで常に MagicMock を返すため、
+        型チェックに callable() だけは不十分。
+
+        解決策:
+          1. latest_wait_time 属性が実際の float/int ならそれを使う
+             （Mockで手動設定された場合: t.latest_wait_time = 11.0 等）
+          2. 次に get_latest_wait_time() が実際の callable かつ戻り値が float/int ならそれを使う
+          3. なにも取れなければ 0.0 を返す
         """
-        if callable(getattr(self.tier1, "get_latest_wait_time", None)):
-            return self.tier1.get_latest_wait_time()
-        return getattr(self.tier1, "latest_wait_time", 0.0)
+        # まず latest_wait_time 属性を直接が確認する。
+        # Mockで t.latest_wait_time = 11.0 のように手動設定した float を优先する。
+        raw = getattr(self.tier1, "latest_wait_time", None)
+        if isinstance(raw, (int, float)):
+            return float(raw)
+
+        # 次に get_latest_wait_time() メソッドを試みる。
+        # callable チェックだけでなく、呼び出し結果も float であることを確認する。
+        fn = getattr(self.tier1, "get_latest_wait_time", None)
+        if callable(fn):
+            result = fn()
+            if isinstance(result, (int, float)):
+                return float(result)
+
+        # どちらも取れなければ待機なしとみなす
+        return 0.0
 
     # ======================================================================
     # 推論実行（両形式対応）
@@ -294,25 +292,14 @@ class EngineRouter:
 
         形式2 — 旧形式 (str + kwargs):
             result = await router.infer("prompt", task_type="code", force_tier=1)
-
-        Args:
-            prompt_or_task: InferenceTask インスタンス or 入力プロンプト文字列
-            task_type:      旧形式用タスク種別文字列（"code" / "summary" / "default" 等）
-            max_tokens:     旧形式用最大生成トークン数
-            temperature:    旧形式用サンプリング温度
-            timeout_s:      旧形式用タイムアウト秒数
-            force_tier:     旧形式用エンジン強制指定 (1/2/3)
-
-        Returns:
-            InferenceResult
         """
-        # --- InferenceTask ベースの新形式 ---
+        # --- 新形式 ---
         if isinstance(prompt_or_task, InferenceTask):
             task = prompt_or_task
             decision = self.route(task)
             return await self._dispatch(decision.selected_tier, task)
 
-        # --- 旧形式（str + kwargs）→ InferenceTask に変換して処理 ---
+        # --- 旧形式（str）→ InferenceTask 変換 ---
         prompt = prompt_or_task
         resolved_type = _normalize_task_type(task_type or "default")
         task = InferenceTask(
@@ -324,7 +311,6 @@ class EngineRouter:
             timeout_s=timeout_s,
         )
 
-        # force_tier 指定時は route() をスキップして直接ディスパッチ
         if force_tier == 1:
             return await self._dispatch(SelectedTier.TIER1, task)
         elif force_tier == 2:
@@ -339,12 +325,7 @@ class EngineRouter:
     # 内部ディスパッチ
     # ======================================================================
 
-    async def _dispatch(
-        self,
-        tier: SelectedTier,
-        task: InferenceTask,
-    ) -> InferenceResult:
-        """選択された Tier に応じて各実行メソッドへルーティングする。"""
+    async def _dispatch(self, tier: SelectedTier, task: InferenceTask) -> InferenceResult:
         if tier == SelectedTier.TIER3:
             return await self._run_tier3(task)
         elif tier == SelectedTier.TIER2:
@@ -365,15 +346,11 @@ class EngineRouter:
             return result
         except TimeoutError as e:
             logger.error(f"EngineRouter: Tier1 VRAM lock timeout: {e}")
-            return InferenceResult(
-                text="", latency_ms=0.0,
-                error=f"Tier1 VRAM lock timeout: {e}"
-            )
+            return InferenceResult(text="", latency_ms=0.0, error=f"Tier1 VRAM lock timeout: {e}")
 
     async def _run_tier2(self, task: InferenceTask) -> InferenceResult:
         """Tier2 (Gemini) で推論。外部APIなので VRAM ロック不要。"""
         if self.tier2 is None:
-            logger.warning("EngineRouter: Tier2 unavailable, falling back to Tier1")
             return await self._run_tier1(task)
 
         result = await self.tier2.infer(
@@ -382,13 +359,9 @@ class EngineRouter:
             temperature=task.temperature,
             timeout_s=task.timeout_s,
         )
-
         if result.error:
-            logger.warning(
-                f"EngineRouter: Tier2 error, falling back to Tier1. error={result.error}"
-            )
+            logger.warning(f"EngineRouter: Tier2 error, fallback to Tier1. error={result.error}")
             return await self._run_tier1(task)
-
         return result
 
     async def _run_tier3(self, task: InferenceTask) -> InferenceResult:
@@ -403,17 +376,11 @@ class EngineRouter:
                 )
         except TimeoutError as e:
             logger.error(f"EngineRouter: Tier3 VRAM lock timeout: {e}")
-            return InferenceResult(
-                text="", latency_ms=0.0,
-                error=f"Tier3 VRAM lock timeout: {e}"
-            )
+            return InferenceResult(text="", latency_ms=0.0, error=f"Tier3 VRAM lock timeout: {e}")
 
         if result.error:
-            logger.warning(
-                f"EngineRouter: Tier3 error, falling back to Tier1. error={result.error}"
-            )
+            logger.warning(f"EngineRouter: Tier3 error, fallback to Tier1. error={result.error}")
             return await self._run_tier1(task)
-
         return result
 
     # ======================================================================
@@ -421,24 +388,13 @@ class EngineRouter:
     # ======================================================================
 
     def get_status(self) -> dict:
-        """
-        エンジン状態サマリを返す。
-
-        Returns:
-            {
-                "tier1_wait_time":  float,
-                "tier2_available":  bool,
-                "tier2_quota":      dict,
-                "tier3_available":  bool,
-            }
-        """
+        """Tier1待機時間・Tier2可用状態・Quota状態を返す。"""
         tier2_quota: dict = {"status": "unavailable"}
         if self.tier2:
             try:
                 tier2_quota = self.tier2.get_remaining_quota()
             except Exception:
                 pass
-
         return {
             "tier1_wait_time": self._get_tier1_wait_time(),
             "tier2_available": self.tier2 is not None,
