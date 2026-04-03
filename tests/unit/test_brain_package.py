@@ -120,15 +120,18 @@ class TestBrainPackageStructure:
         assert seeded_brain.is_complete() is True
 
     def test_is_complete_false_when_missing_file(self, tmp_path: Path):
-        """metadata.jsonが存在しない場合はis_complete()がFalse"""
+        """metadata.jsonを削除するとis_complete()がFalseになりmissing_componentsに含まれる"""
         brain = BrainPackage.create_blank(tmp_path / "incomplete")
-        brain.ensure_structure()
-        # metadata.jsonだけ消す
+        # save_all()でmetadata.jsonを含む全ファイルをdiskに書き出す
+        brain.save_all()
+        # metadata.jsonが存在することを先に確認
+        assert brain.get_metadata_path().exists(), "save_all()後にmetadata.jsonが存在しない"
+        # metadata.jsonだけ削除
         brain.get_metadata_path().unlink()
-        # 新しいBrainPackageインスタンスで再確認（ファイルの存在チェック）
-        reloaded_check = BrainPackage(tmp_path / "incomplete")
-        missing = reloaded_check.get_missing_components()
-        # ファイルレベルではmetadata.jsonが存在しないはず
+        # has_metadata_file()はファイル存在をそのまま見る
+        assert brain.has_metadata_file() is False
+        # get_missing_components()に"metadata.json"が現れるか確認
+        missing = brain.get_missing_components()
         assert "metadata.json" in missing
 
     def test_get_missing_components_empty_on_complete(self, seeded_brain: BrainPackage):
