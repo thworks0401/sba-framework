@@ -28,11 +28,17 @@ EngineRouter: タスク種別・VRAM状態・Quota状態に基づく推論エン
     v2.3: _run_tier3() に generate_code() 入口を追加。
           Tier3Engine が generate_code() を持つ場合はそちらを呼び、
           なければ infer() にフォールバックする。
+    v2.4: MagicMock 自動属性問題に対応。
+          tier3 が MagicMock の場合、存在しない generate_code 属性が自動生成されて
+          infer が一度も呼ばれない問題を修正。
+          「インスタンスの __dict__ に明示的に定義されている generate_code のみ」
+          を generate_code として扱い、それ以外は infer() を使う。
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 from enum import Enum
 from typing import Optional, Literal, Union
 
@@ -179,8 +185,8 @@ class EngineRouter:
                 self.tier2 = Tier2Engine()
             except Exception as e:
                 logger.warning(
-                    f"EngineRouter: Tier2 初期化失敗（APIキーなし？）。"
-                    f"Tier1+Tier3 のみで動作します。error={e}"
+                    "EngineRouter: Tier2 初期化失敗（APIキーなし？）。"
+                    "Tier1+Tier3 のみで動作します。error={}".format(e)
                 )
                 self.tier2 = None
 
@@ -196,7 +202,10 @@ class EngineRouter:
         if task.type in _CODE_TASK_TYPES:
             return RoutingDecision(
                 selected_tier=SelectedTier.TIER3,
-                reason=f"コードタスク ({task.type.value}) のため Tier3 (Qwen2.5-Coder) を選択",
+                reason=(
+                    f"コードタスク ({task.type.value}) のため "
+                    "Tier3 (Qwen2.5-Coder) を選択"
+                ),
             )
 
         # --- 長文テキスト → Tier2（Quota あり）---
@@ -210,16 +219,17 @@ class EngineRouter:
                 return RoutingDecision(
                     selected_tier=SelectedTier.TIER2,
                     reason=(
-                        f"長文タスク ({task.estimated_tokens} tokens > {TIER2_TOKEN_THRESHOLD}) "
-                        f"かつ Tier2 Quota 有効のため Tier2 (Gemini) を選択"
+                        f"長文タスク ({task.estimated_tokens} tokens > "
+                        f"{TIER2_TOKEN_THRESHOLD}) かつ "
+                        "Tier2 Quota 有効のため Tier2 (Gemini) を選択"
                     ),
                 )
             else:
                 return RoutingDecision(
                     selected_tier=SelectedTier.TIER1,
                     reason=(
-                        f"長文タスクだが Tier2 Quota 枯渇 (status={quota.get('status')})。"
-                        f"Tier1 へフォールバック"
+                        "長文タスクだが Tier2 Quota 枯渇 "
+                        f"(status={quota.get('status')})。Tier1 へフォールバック"
                     ),
                 )
 
@@ -231,8 +241,8 @@ class EngineRouter:
                 return RoutingDecision(
                     selected_tier=SelectedTier.TIER2,
                     reason=(
-                        f"Tier1 待機時間 {tier1_wait:.1f}s > {TIER1_WAIT_THRESHOLD_S}s のため "
-                        f"Tier2 (Gemini) へフォールバック"
+                        f"Tier1 待機時間 {tier1_wait:.1f}s > "
+                        f"{TIER1_WAIT_THRESHOLD_S}s のため Tier2 (Gemini) へフォールバック"
                     ),
                 )
 
@@ -280,7 +290,9 @@ class EngineRouter:
         推論を実行する。二つの呼び出し形式に対応する:
 
         形式1 — 新形式 (InferenceTask):
-            result = await router.infer(InferenceTask(type=TaskType.CODE_GENERATION, prompt="..."))
+            result = await router.infer(
+                InferenceTask(type=TaskType.CODE_GENERATION, prompt="...")
+            )
 
         形式2 — 旧形式 (str + kwargs):
             result = await router.infer("prompt", task_type="code", force_tier=1)
@@ -338,7 +350,9 @@ class EngineRouter:
             return result
         except TimeoutError as e:
             logger.error(f"EngineRouter: Tier1 VRAM lock timeout: {e}")
-            return InferenceResult(text="", latency_ms=0.0, error=f"Tier1 VRAM lock timeout: {e}")
+            return InferenceResult(
+                text="", latency_ms=0.0, error=f"Tier1 VRAM lock timeout: {e}"
+            )
 
     async def _run_tier2(self, task: InferenceTask) -> InferenceResult:
         """Tier2 (Gemini) で推論。外部APIなので VRAM ロック不要。"""
@@ -352,7 +366,9 @@ class EngineRouter:
             timeout_s=task.timeout_s,
         )
         if result.error:
-            logger.warning(f"EngineRouter: Tier2 error, fallback to Tier1. error={result.error}")
+            logger.warning(
+                f"EngineRouter: Tier2 error, fallback to Tier1. error={result.error}"
+            )
             return await self._run_tier1(task)
         return result
 
@@ -360,19 +376,28 @@ class EngineRouter:
         """
         Tier3 (Qwen2.5-Coder) で推論。VRAM ロック取得してから呼び出す。
 
-        Tier3Engine に generate_code() が定義されている場合はそちらを呼び、
+        Tier3Engine に generate_code() が **明示的に実装されている場合のみ** そちらを呼び、
         なければ infer() にフォールバックする。
 
-        理由: Tier3Engine の定義インターフェースが generate_code() メソッドを持つ場合があり、
-        test_inference.py の Mock オブジェクトも generate_code = AsyncMock() で設定しているため。
+        MagicMock は存在しない属性アクセスでも自動的に MagicMock を返すため、
+        「属性があるかどうか」だけで判定するとテスト時に誤検知する。
+        そのため `tier3.__dict__` にキーが存在するかどうかで
+        「本当に実装されている generate_code か」を判定する。
         """
         try:
             with acquire_vram("tier3"):
-                # generate_code() が AsyncMock または coroutine ならそちらを使う
-                fn = getattr(self.tier3, "generate_code", None)
-                if callable(fn):
-                    import inspect
-                    # 呼び出し結果が coroutine の場合は await、そうでなければ直接使用
+                use_generate_code = False
+
+                # __dict__ ベースで「実際に定義されているメソッド」かを判定
+                if hasattr(self.tier3, "__dict__") and "generate_code" in self.tier3.__dict__:
+                    fn = self.tier3.__dict__["generate_code"]
+                    if callable(fn):
+                        use_generate_code = True
+                else:
+                    fn = None  # 型ヒント用
+
+                if use_generate_code:
+                    # generate_code を優先的に使用
                     maybe_coro = fn(
                         task.prompt,
                         max_tokens=task.max_output_tokens,
@@ -384,7 +409,7 @@ class EngineRouter:
                     else:
                         result = maybe_coro
                 else:
-                    # generate_code() がなければ infer() で代替
+                    # generate_code が未定義 or MagicMock の自動属性の場合は infer() を使用
                     result = await self.tier3.infer(
                         task.prompt,
                         max_tokens=task.max_output_tokens,
@@ -393,10 +418,14 @@ class EngineRouter:
                     )
         except TimeoutError as e:
             logger.error(f"EngineRouter: Tier3 VRAM lock timeout: {e}")
-            return InferenceResult(text="", latency_ms=0.0, error=f"Tier3 VRAM lock timeout: {e}")
+            return InferenceResult(
+                text="", latency_ms=0.0, error=f"Tier3 VRAM lock timeout: {e}"
+            )
 
         if result.error:
-            logger.warning(f"EngineRouter: Tier3 error, fallback to Tier1. error={result.error}")
+            logger.warning(
+                f"EngineRouter: Tier3 error, fallback to Tier1. error={result.error}"
+            )
             return await self._run_tier1(task)
         return result
 
