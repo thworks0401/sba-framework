@@ -7,13 +7,17 @@
   - 重量実験：24時間ごと（夜間）
   - 自律学習ループ：設定可能インターバル
   - デイリーカウンタリセット：00:00
-  - SQLiteJobStore で永続化
+  - SQLiteJobStore で永続化（本番環境）
   - NSSM Windows サービス登録
 
 【修正履歴】
   デフォルトパス "C:/SBA/data/scheduler_jobs.db" のハードコードを
   SBAConfig.load_env() 経由の自動解決に変更。
   SBAConfig がロードできない場合は C:/TH_Works/SBA/data/ にフォールバック。
+
+  jobstore_path=':memory:' を指定した場合は MemoryJobStore に切り替える。
+  テスト環境 + Windows で SQLAlchemyJobStore がジョブを 0 回実行にする
+  問題および start() なしで get_jobs() が空を返す問題を両方回避。
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from pathlib import Path
 from typing import Optional, Callable, Any, Dict, List
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -59,20 +64,32 @@ class SBAScheduler:
         Args:
             brain_id:      Brain ID
             brain_name:    Brain名
-            jobstore_path: Jobs DB パス（省略時: SBAConfig から自動解決）
+            jobstore_path: Jobs DB パス。
+                           ':memory:' を指定すると MemoryJobStore を使用する。
+                           テスト環境や Windows で SQLAlchemy が設定通り動かない
+                           場合に ':memory:' を渡すとメモリにフォールバックできる。
+                           省略時: SBAConfig から自動解決。
         """
         self.brain_id   = brain_id
         self.brain_name = brain_name
 
-        resolved_path = jobstore_path or _resolve_default_jobstore_path()
-        self.jobstore_path = Path(resolved_path)
-        self.jobstore_path.parent.mkdir(parents=True, exist_ok=True)
-
-        jobstore_url = f"sqlite:///{self.jobstore_path}"
+        # ':memory:' の場合は MemoryJobStore、それ以外は SQLAlchemyJobStore
+        if jobstore_path == ":memory:":
+            # テスト環境用: インメモリ JobStore
+            # - Windows環境で SQLAlchemyが 0回実行になる問題を回避
+            # - start() なしでも get_jobs() が正しく返る
+            self.jobstore_path = None
+            jobstore: Any = MemoryJobStore()
+        else:
+            resolved_path = jobstore_path or _resolve_default_jobstore_path()
+            self.jobstore_path = Path(resolved_path)
+            self.jobstore_path.parent.mkdir(parents=True, exist_ok=True)
+            jobstore_url = f"sqlite:///{self.jobstore_path}"
+            jobstore = SQLAlchemyJobStore(url=jobstore_url)
 
         self.scheduler = BackgroundScheduler(
             jobstores={
-                "default": SQLAlchemyJobStore(url=jobstore_url)
+                "default": jobstore
             },
             job_defaults={
                 "coalesce":      True,
@@ -97,7 +114,7 @@ class SBAScheduler:
             job = self.scheduler.add_job(
                 callback,
                 name            = "lightweight_experiment",
-                trigger         = CronTrigger(minute=0),  # 毎時0分
+                trigger         = CronTrigger(minute=0),  # 毎時 0分
                 id              = "job_lightweight_exp",
                 replace_existing = True,
             )
@@ -368,6 +385,7 @@ def get_scheduler(
     """
     グローバルスケジューラインスタンスを取得（Singleton）。
     jobstore_path 省略時は SBAConfig から自動解決。
+    jobstore_path=':memory:' の場合は MemoryJobStore を使用。
     """
     global _scheduler_instance
 
