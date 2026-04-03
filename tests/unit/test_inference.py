@@ -73,6 +73,12 @@ def test_router_routes_long_text_to_tier2_when_quota_available():
 
 
 def test_router_falls_back_to_tier1_when_tier2_quota_is_low():
+    """
+    Tier2 クォータ枯渇時に Tier1 へフォールバックすることを確認。
+
+    reason は日本語（'フォールバック' を含む）のため、
+    英語 'fallback' ではなく 'tier1' の存在と selected_tier で判定する。
+    """
     router, tier1, tier2, _ = _build_router()
     tier2.get_remaining_quota.return_value = {
         "remaining_tokens": 50,
@@ -89,8 +95,11 @@ def test_router_falls_back_to_tier1_when_tier2_quota_is_low():
         )
     )
 
+    # Tier1 が選択されていること
     assert decision.selected_tier == SelectedTier.TIER1
-    assert "fallback" in decision.reason.lower()
+    # reason に「tier1」または「フォールバック」が含まれること（大文字小文字不問）
+    reason_lower = decision.reason.lower()
+    assert "tier1" in reason_lower or "フォールバック" in reason_lower
 
 
 @pytest.mark.asyncio
@@ -132,4 +141,3 @@ def test_vram_guard_unloads_ollama_before_whisper(mock_generate):
         assert mock_generate.call_count == 2
     finally:
         guard.release_lock(ModelType.WHISPER)
-
