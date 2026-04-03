@@ -10,6 +10,12 @@ Qdrant ベクトルストア実装
 Brain Hot-Swap との相性:
   - Qdrant データはディレクトリベース（vector_index/ としてコピー可能）
   - Brain save/load 時にディレクトリごとバックアップ
+
+【修正履歴】
+  __init__ で即時実行していた Embedder.get_instance() を廃止。
+  monkeypatch がコンストラクタ後に適用されるテスト環境では
+  モックが間に合わないため、初回使用時に取得する遅延初期化に変更。
+  _get_embedder() メソッド経由で self._embedder キャッシュを利用する。
 """
 
 from __future__ import annotations
@@ -45,20 +51,44 @@ class QdrantVectorStore:
         Args:
             vector_index_path: Qdrant ローカルディレクトリパス
             brain_id: Brain UUID（コレクション名の一部）
+
+        【遅延初期化】
+            Embedder はここでは取得しない。
+            monkeypatch / DI が __init__ の後に適用されるケースで
+            モックが効かなくなるのを防ぐため、_get_embedder() で
+            初回アクセス時に取得する設計にしている。
         """
         self.vector_index_path = Path(vector_index_path)
         self.vector_index_path.mkdir(parents=True, exist_ok=True)
 
         self.brain_id = brain_id
         self.collection_name = f"brain_{brain_id}"[:64]  # Qdrant 制限
-        self.embedder = Embedder.get_instance()
         self.vector_dim = 1024  # bge-m3 の次元数
+
+        # 遅延初期化: __init__ では None にしておく
+        self._embedder: Optional[Embedder] = None
 
         # Qdrant ローカルクライアント
         self.client = QdrantClient(path=str(self.vector_index_path))
 
         # コレクション初期化
         self._ensure_collection()
+
+    # ======================================================================
+    # Embedder 遅延取得
+    # ======================================================================
+
+    def _get_embedder(self) -> Embedder:
+        """
+        Embedder シングルトンを遅延取得して返す。
+
+        キャッシュ済みであればそのまま返し、
+        未取得であれば Embedder.get_instance() を呼んで self._embedder にキャッシュする。
+        テスト時に monkeypatch で差し替えたモックがここで正しく適用される。
+        """
+        if self._embedder is None:
+            self._embedder = Embedder.get_instance()
+        return self._embedder
 
     def _ensure_collection(self) -> None:
         """コレクションが存在しなければ作成"""
@@ -100,9 +130,12 @@ class QdrantVectorStore:
         if not chunks:
             return []
 
+        # 遅延取得した Embedder を使用
+        embedder = self._get_embedder()
+
         # テキストをまとめてベクトル化
         texts = [chunk["text"] for chunk in chunks]
-        vectors = self.embedder.encode(texts)
+        vectors = embedder.encode(texts)
 
         points = []
         point_ids = []
@@ -156,7 +189,9 @@ class QdrantVectorStore:
         Returns:
             [{"chunk_id": str, "text": str, "score": float, ...}, ...]
         """
-        query_vector = self.embedder.encode_single(query_text)
+        # 遅延取得した Embedder を使用
+        embedder = self._get_embedder()
+        query_vector = embedder.encode_single(query_text)
 
         # フィルタ条件
         filter_cond = None
@@ -219,11 +254,13 @@ class QdrantVectorStore:
         Returns:
             重複が見つかった場合は dict、見つからなかった場合は None
         """
+        # _get_embedder() 経由なので DEDUP_THRESHOLD もモック対象から正しく取得できる
+        embedder = self._get_embedder()
         results = self.search(
             query_text=text,
             subskill_id=subskill_id,
             limit=1,
-            score_threshold=self.embedder.DEDUP_THRESHOLD,
+            score_threshold=embedder.DEDUP_THRESHOLD,
         )
 
         if results:
