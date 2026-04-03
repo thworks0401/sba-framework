@@ -13,11 +13,13 @@
 【修正履歴】
   デフォルトパス "C:/SBA/data/scheduler_jobs.db" のハードコードを
   SBAConfig.load_env() 経由の自動解決に変更。
-  SBAConfig がロードできない場合は C:/TH_Works/SBA/data/ にフォールバック。
 
-  jobstore_path=':memory:' を指定した場合は MemoryJobStore に切り替える。
-  テスト環境 + Windows で SQLAlchemyJobStore がジョブを 0 回実行にする
-  問題および start() なしで get_jobs() が空を返す問題を両方回避。
+  jobstore_path=':memory:' を指定した場合は jobstores={} で空渡し。
+  APScheduler 3.x は jobstores が空のときデフォルトのインメモリストアを自動使用する。
+  apscheduler.jobstores.memory は 3.x に存在しないためインポート不要。
+
+  Windows環境でジョブ 0回実行になる問題と
+  start() なしで get_jobs() が空を返す問題を両方回避。
 """
 
 from __future__ import annotations
@@ -31,7 +33,6 @@ from pathlib import Path
 from typing import Optional, Callable, Any, Dict, List
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -65,37 +66,42 @@ class SBAScheduler:
             brain_id:      Brain ID
             brain_name:    Brain名
             jobstore_path: Jobs DB パス。
-                           ':memory:' を指定すると MemoryJobStore を使用する。
+                           ':memory:' を指定するとインメモリモードになる。
+                           APScheduler 3.x は jobstores を空にするだけで
+                           自動的にインメモリのデフォルト JobStore を使用する。
                            テスト環境や Windows で SQLAlchemy が設定通り動かない
-                           場合に ':memory:' を渡すとメモリにフォールバックできる。
+                           場合に ':memory:' を渡すと回避できる。
                            省略時: SBAConfig から自動解決。
         """
         self.brain_id   = brain_id
         self.brain_name = brain_name
 
-        # ':memory:' の場合は MemoryJobStore、それ以外は SQLAlchemyJobStore
         if jobstore_path == ":memory:":
-            # テスト環境用: インメモリ JobStore
-            # - Windows環境で SQLAlchemyが 0回実行になる問題を回避
-            # - start() なしでも get_jobs() が正しく返る
+            # テスト環境用: jobstores を空辞書にすることで
+            # APScheduler 3.x がデフォルトのインメモリ JobStore を使用する
+            # apscheduler.jobstores.memory は 3.x には存在しないのでインポート不要
             self.jobstore_path = None
-            jobstore: Any = MemoryJobStore()
+            self.scheduler = BackgroundScheduler(
+                jobstores={},  # 空 = デフォルトインメモリストアが自動適用される
+                job_defaults={
+                    "coalesce":      True,
+                    "max_instances": 1,
+                }
+            )
         else:
             resolved_path = jobstore_path or _resolve_default_jobstore_path()
             self.jobstore_path = Path(resolved_path)
             self.jobstore_path.parent.mkdir(parents=True, exist_ok=True)
             jobstore_url = f"sqlite:///{self.jobstore_path}"
-            jobstore = SQLAlchemyJobStore(url=jobstore_url)
-
-        self.scheduler = BackgroundScheduler(
-            jobstores={
-                "default": jobstore
-            },
-            job_defaults={
-                "coalesce":      True,
-                "max_instances": 1,
-            }
-        )
+            self.scheduler = BackgroundScheduler(
+                jobstores={
+                    "default": SQLAlchemyJobStore(url=jobstore_url)
+                },
+                job_defaults={
+                    "coalesce":      True,
+                    "max_instances": 1,
+                }
+            )
 
         self._is_running      = False
         self._registered_jobs: Dict[str, Job] = {}
@@ -294,7 +300,6 @@ class SBAScheduler:
         """NSSM サービス登録用 PowerShell スクリプト生成"""
         service_name = f"SBAScheduler_{self.brain_name}".replace(" ", "_")
 
-        # SBAConfig からルートパスを取得
         try:
             from ..config import SBAConfig
             cfg        = SBAConfig.load_env()
@@ -384,8 +389,7 @@ def get_scheduler(
 ) -> SBAScheduler:
     """
     グローバルスケジューラインスタンスを取得（Singleton）。
-    jobstore_path 省略時は SBAConfig から自動解決。
-    jobstore_path=':memory:' の場合は MemoryJobStore を使用。
+    jobstore_path=':memory:' の場合はインメモリモードで起動。
     """
     global _scheduler_instance
 
@@ -527,7 +531,6 @@ def start_daemon(
 ) -> None:
     """
     APScheduler + 学習ループ + 実験ジョブを起動し、常駐待機する。
-
     NSSM / `python -m sba daemon` から呼ばれるエントリポイント。
     """
     runtime = build_learning_runtime(jobstore_path)
