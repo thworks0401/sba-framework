@@ -11,15 +11,18 @@
   - NSSM Windows サービス登録
 
 【修正履歴】
-  デフォルトパス "C:/SBA/data/scheduler_jobs.db" のハードコードを
-  SBAConfig.load_env() 経由の自動解決に変更。
+  2026-04-03 (fix #1):
+    デフォルトパス "C:/SBA/data/scheduler_jobs.db" のハードコードを
+    SBAConfig.load_env() 経由の自動解決に変更。
 
-  jobstore_path=':memory:' を指定した場合は jobstores={} で空渡し。
-  APScheduler 3.x は jobstores が空のときデフォルトのインメモリストアを自動使用する。
-  apscheduler.jobstores.memory は 3.x に存在しないためインポート不要。
+  2026-04-03 (fix #2):
+    jobstores={} では APScheduler 3.x は "default" JobStore を作らず、
+    add_job() がサイレント失敗（except で握り潰し）してジョブ0件になる問題を修正。
+    :memory: モードでは jobstores 引数を完全省略することで
+    APScheduler が自動で "default" = MemoryJobStore を設定する。
 
-  Windows環境でジョブ 0回実行になる問題と
-  start() なしで get_jobs() が空を返す問題を両方回避。
+    get_job_list() を scheduler.get_jobs() 依存から _registered_jobs
+    内部辞書参照に変更。start() 前でも登録済みジョブを正しく返せる。
 """
 
 from __future__ import annotations
@@ -66,29 +69,39 @@ class SBAScheduler:
             brain_id:      Brain ID
             brain_name:    Brain名
             jobstore_path: Jobs DB パス。
-                           ':memory:' を指定するとインメモリモードになる。
-                           APScheduler 3.x は jobstores を空にするだけで
-                           自動的にインメモリのデフォルト JobStore を使用する。
-                           テスト環境や Windows で SQLAlchemy が設定通り動かない
-                           場合に ':memory:' を渡すと回避できる。
-                           省略時: SBAConfig から自動解決。
+                           ':memory:' → jobstores 引数を省略して
+                           APScheduler が "default" = MemoryJobStore を自動設定。
+                           jobstores={} だと "default" が存在せず add_job が
+                           サイレント失敗するため、省略が正しい。
+                           省略時: SBAConfig から自動解決して SQLiteJobStore を使用。
         """
         self.brain_id   = brain_id
         self.brain_name = brain_name
 
+        # _registered_jobs: scheduler.get_jobs() に依存しない内部管理辞書。
+        # start() 前でも get_job_list() が正しく動くようにするため。
+        self._registered_jobs: Dict[str, Job] = {}
+        self._is_running = False
+
         if jobstore_path == ":memory:":
-            # テスト環境用: jobstores を空辞書にすることで
-            # APScheduler 3.x がデフォルトのインメモリ JobStore を使用する
-            # apscheduler.jobstores.memory は 3.x には存在しないのでインポート不要
+            # ============================================================
+            # インメモリモード（テスト・一時実行用）
+            # jobstores 引数を省略 = APScheduler が自動で
+            # "default" = MemoryJobStore を割り当てる。
+            # jobstores={} だと "default" が存在しない状態になり
+            # add_job() が JobLookupError でサイレント失敗する。
+            # ============================================================
             self.jobstore_path = None
             self.scheduler = BackgroundScheduler(
-                jobstores={},  # 空 = デフォルトインメモリストアが自動適用される
                 job_defaults={
                     "coalesce":      True,
                     "max_instances": 1,
                 }
             )
         else:
+            # ============================================================
+            # 永続化モード（本番・SQLiteJobStore）
+            # ============================================================
             resolved_path = jobstore_path or _resolve_default_jobstore_path()
             self.jobstore_path = Path(resolved_path)
             self.jobstore_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,9 +116,6 @@ class SBAScheduler:
                 }
             )
 
-        self._is_running      = False
-        self._registered_jobs: Dict[str, Job] = {}
-
     # ======================================================================
     # ジョブ登録
     # ======================================================================
@@ -119,12 +129,12 @@ class SBAScheduler:
         try:
             job = self.scheduler.add_job(
                 callback,
-                name            = "lightweight_experiment",
-                trigger         = CronTrigger(minute=0),  # 毎時 0分
-                id              = "job_lightweight_exp",
+                name             = "lightweight_experiment",
+                trigger          = CronTrigger(minute=0),
+                id               = "job_lightweight_exp",
                 replace_existing = True,
             )
-            self._registered_jobs["lightweight_experiment"] = job
+            self._registered_jobs["job_lightweight_exp"] = job
             logger.info("Registered lightweight experiment job (hourly)")
             return job
         except Exception as e:
@@ -136,12 +146,12 @@ class SBAScheduler:
         try:
             job = self.scheduler.add_job(
                 callback,
-                name            = "medium_experiment",
-                trigger         = CronTrigger(hour="*/6", minute=0),
-                id              = "job_medium_exp",
+                name             = "medium_experiment",
+                trigger          = CronTrigger(hour="*/6", minute=0),
+                id               = "job_medium_exp",
                 replace_existing = True,
             )
-            self._registered_jobs["medium_experiment"] = job
+            self._registered_jobs["job_medium_exp"] = job
             logger.info("Registered medium experiment job (every 6 hours)")
             return job
         except Exception as e:
@@ -157,12 +167,12 @@ class SBAScheduler:
         try:
             job = self.scheduler.add_job(
                 callback,
-                name            = "heavyweight_experiment",
-                trigger         = CronTrigger(hour=run_hour, minute=0),
-                id              = "job_heavyweight_exp",
+                name             = "heavyweight_experiment",
+                trigger          = CronTrigger(hour=run_hour, minute=0),
+                id               = "job_heavyweight_exp",
                 replace_existing = True,
             )
-            self._registered_jobs["heavyweight_experiment"] = job
+            self._registered_jobs["job_heavyweight_exp"] = job
             logger.info(f"Registered heavyweight experiment job (daily at {run_hour:02d}:00)")
             return job
         except Exception as e:
@@ -178,12 +188,12 @@ class SBAScheduler:
         try:
             job = self.scheduler.add_job(
                 callback,
-                name            = "learning_loop",
-                trigger         = IntervalTrigger(minutes=interval_minutes),
-                id              = "job_learning_loop",
+                name             = "learning_loop",
+                trigger          = IntervalTrigger(minutes=interval_minutes),
+                id               = "job_learning_loop",
                 replace_existing = True,
             )
-            self._registered_jobs["learning_loop"] = job
+            self._registered_jobs["job_learning_loop"] = job
             logger.info(f"Registered learning loop job (every {interval_minutes} minutes)")
             return job
         except Exception as e:
@@ -195,12 +205,12 @@ class SBAScheduler:
         try:
             job = self.scheduler.add_job(
                 callback,
-                name            = "daily_counter_reset",
-                trigger         = CronTrigger(hour=0, minute=0),
-                id              = "job_daily_counter_reset",
+                name             = "daily_counter_reset",
+                trigger          = CronTrigger(hour=0, minute=0),
+                id               = "job_daily_counter_reset",
                 replace_existing = True,
             )
-            self._registered_jobs["daily_counter_reset"] = job
+            self._registered_jobs["job_daily_counter_reset"] = job
             logger.info("Registered daily counter reset job (00:00 daily)")
             return job
         except Exception as e:
@@ -266,20 +276,25 @@ class SBAScheduler:
     # ======================================================================
 
     def get_job_list(self) -> List[Dict[str, Any]]:
-        """登録中のジョブ一覧"""
-        return [
-            {
+        """
+        登録中のジョブ一覧を返す。
+
+        【設計】
+            scheduler.get_jobs() ではなく _registered_jobs 内部辞書を参照する。
+            理由: scheduler.get_jobs() は start() 前や jobstores 構成によっては
+            空を返すことがある（APScheduler 3.x の既知挙動）。
+            _registered_jobs は add_job 成功時に必ず更新されるため信頼性が高い。
+        """
+        result = []
+        for job in self._registered_jobs.values():
+            next_run = getattr(job, "next_run_time", None)
+            result.append({
                 "id":            job.id,
                 "name":          job.name,
                 "trigger":       str(job.trigger),
-                "next_run_time": (
-                    getattr(job, "next_run_time", None).isoformat()
-                    if getattr(job, "next_run_time", None)
-                    else None
-                ),
-            }
-            for job in self.scheduler.get_jobs()
-        ]
+                "next_run_time": next_run.isoformat() if next_run else None,
+            })
+        return result
 
     def remove_job(self, job_id: str) -> bool:
         """ジョブ削除"""

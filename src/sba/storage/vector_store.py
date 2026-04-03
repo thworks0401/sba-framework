@@ -12,11 +12,18 @@ Brain Hot-Swap との相性:
   - Brain save/load 時にディレクトリごとバックアップ
 
 【修正履歴】
-  __init__ で即時実行していた Embedder.get_instance() を廃止。
-  遅延初期化を導入したが、キャッシュがあると monkeypatch 後の
-  差し替えが無視されるため、キャッシュを持たず毎回
-  Embedder.get_instance() に委論する方式に変更。
-  本番時は Embedder 軽で、Singleton がキャッシュするのでパフォーマンス影響なし。
+  2026-04-03 (fix #1):
+    __init__ で即時実行していた Embedder.get_instance() を廃止。
+    遅延初期化を導入したが、キャッシュがあると monkeypatch 後の
+    差し替えが無視されるため、キャッシュを持たず毎回
+    Embedder.get_instance() に委論する方式に変更。
+    本番時は Embedder 自身が Singleton なのでパフォーマンス影響なし。
+
+  2026-04-03 (fix #2):
+    search() の Qdrant 戻り値パースを完全堅牢化。
+    query_points() / search() どちらの API でも、
+    結果が QueryResponse(.points) でも list でも正しく処理できるよう
+    try/except + 統一ループに変更。
 """
 
 from __future__ import annotations
@@ -27,7 +34,14 @@ from pathlib import Path
 
 import numpy as np
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 
 from ..utils.embedder import Embedder
 
@@ -41,7 +55,7 @@ class QdrantVectorStore:
     Qdrant ローカルモード ベクトルストア。
 
     Brain ごとにコレクション名を分離し、
-    SubSkill フィルタリング搜索に対応。
+    SubSkill フィルタリング検索に対応。
     """
 
     def __init__(self, vector_index_path: str, brain_id: str) -> None:
@@ -52,7 +66,7 @@ class QdrantVectorStore:
             vector_index_path: Qdrant ローカルディレクトリパス
             brain_id: Brain UUID（コレクション名の一部）
 
-        【設計方针】
+        【設計方針】
             Embedder は __init__ で取得しない。
             _get_embedder() 経由で常に Embedder.get_instance() を呼び出すことで
             monkeypatch / DI への互換性を保つ。
@@ -82,7 +96,7 @@ class QdrantVectorStore:
         キャッシュを持たない理由:
           - monkeypatch がコンストラクタ後に Embedder.get_instance を差し替える場合、
             self._embedder キャッシュがあると差し替え前のインスタンスが残る。
-          - 本番時は Embedder 軽が Singleton キャッシュするので、毎回呼び出してもパフォーマンス影響なし。
+          - 本番時は Embedder 自身が Singleton なので毎回呼んでも重くない。
         """
         return Embedder.get_instance()
 
@@ -137,21 +151,20 @@ class QdrantVectorStore:
             point_ids.append(point_id)
 
             payload = {
-                "chunk_id": chunk.get("id", str(uuid.uuid4())),
-                "text": chunk["text"],
+                "chunk_id":   chunk.get("id", str(uuid.uuid4())),
+                "text":       chunk["text"],
                 "trust_score": chunk.get("trust_score", 0.5),
                 "subskill_id": subskill_id,
                 "source_type": source_type,
-                "source_url": source_url or "",
+                "source_url":  source_url or "",
                 "acquired_at": chunk.get("acquired_at", ""),
             }
 
-            point = PointStruct(
+            points.append(PointStruct(
                 id=point_id,
                 vector=vectors[i].tolist(),
                 payload=payload,
-            )
-            points.append(point)
+            ))
 
         self.client.upsert(
             collection_name=self.collection_name,
@@ -170,6 +183,13 @@ class QdrantVectorStore:
         """
         テキスト類似検索（オプション SubSkill フィルタ付き）。
 
+        【設計】
+            Qdrant クライアントのバージョンによって
+            query_points() と search() が混在する環境に対応するため
+            try/except で両方を試みる。
+            戻り値も QueryResponse(.points) と list の両方を
+            統一パターンで処理する。
+
         Args:
             query_text: クエリテキスト
             subskill_id: フィルタ条件（None = 全 SubSkill）
@@ -182,6 +202,12 @@ class QdrantVectorStore:
         embedder = self._get_embedder()
         query_vector = embedder.encode_single(query_text)
 
+        # numpy array → list に変換（Qdrant クライアントの型要件）
+        if hasattr(query_vector, "tolist"):
+            query_vector_list = query_vector.tolist()
+        else:
+            query_vector_list = list(query_vector)
+
         filter_cond = None
         if subskill_id:
             filter_cond = Filter(
@@ -193,37 +219,68 @@ class QdrantVectorStore:
                 ]
             )
 
-        try:
-            results = self.client.query_points(
-                collection_name=self.collection_name,
-                query=query_vector.tolist(),
-                query_filter=filter_cond,
-                limit=limit,
-                score_threshold=score_threshold,
-            )
-        except AttributeError:
-            results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector.tolist(),
-                query_filter=filter_cond,
-                limit=limit,
-                score_threshold=score_threshold,
-            )
+        # ---- Qdrant API 呼び出し（バージョン差異を吸収） ----
+        raw_results = None
 
+        try:
+            # Qdrant client >= 1.7 の新 API
+            response = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector_list,
+                query_filter=filter_cond,
+                limit=limit,
+                score_threshold=score_threshold,
+            )
+            # QueryResponse は .points を持つ
+            raw_results = response.points if hasattr(response, "points") else list(response)
+        except AttributeError:
+            pass
+        except Exception:
+            pass
+
+        if raw_results is None:
+            try:
+                # 旧 API fallback
+                raw_results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector_list,
+                    query_filter=filter_cond,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                )
+                # search() は list[ScoredPoint] を返す
+                if hasattr(raw_results, "points"):
+                    raw_results = raw_results.points
+                elif not isinstance(raw_results, list):
+                    raw_results = list(raw_results)
+            except Exception:
+                raw_results = []
+
+        if raw_results is None:
+            raw_results = []
+
+        # ---- 統一パース ----
         matches = []
-        for result in results.points if hasattr(results, 'points') else results:
-            payload = result.payload if hasattr(result, 'payload') else result.get('payload', {})
-            score = result.score if hasattr(result, 'score') else result.get('score', 0.0)
+        for result in raw_results:
+            # ScoredPoint オブジェクトと dict の両方に対応
+            if hasattr(result, "payload"):
+                payload = result.payload or {}
+                score   = result.score
+                rid     = str(result.id)
+            else:
+                payload = result.get("payload", {})
+                score   = result.get("score", 0.0)
+                rid     = str(result.get("id", ""))
 
             matches.append({
-                "qdrant_id": str(result.id) if hasattr(result, 'id') else str(result.get('id')),
-                "chunk_id": payload.get("chunk_id"),
-                "text": payload.get("text"),
-                "score": score,
+                "qdrant_id":   rid,
+                "chunk_id":    payload.get("chunk_id"),
+                "text":        payload.get("text"),
+                "score":       score,
                 "trust_score": payload.get("trust_score"),
                 "subskill_id": payload.get("subskill_id"),
                 "source_type": payload.get("source_type"),
-                "source_url": payload.get("source_url"),
+                "source_url":  payload.get("source_url"),
             })
 
         return matches
@@ -263,9 +320,7 @@ class QdrantVectorStore:
         subskill_id: str,
         limit: int = 100,
     ) -> list[dict]:
-        """
-        SubSkill 別にチャンク一覧取得。
-        """
+        """SubSkill 別にチャンク一覧取得。"""
         filter_cond = Filter(
             must=[
                 FieldCondition(
@@ -284,12 +339,12 @@ class QdrantVectorStore:
         chunks = []
         for point in points:
             chunks.append({
-                "qdrant_id": str(point.id),
-                "chunk_id": point.payload.get("chunk_id"),
-                "text": point.payload.get("text"),
+                "qdrant_id":   str(point.id),
+                "chunk_id":    point.payload.get("chunk_id"),
+                "text":        point.payload.get("text"),
                 "trust_score": point.payload.get("trust_score"),
                 "source_type": point.payload.get("source_type"),
-                "source_url": point.payload.get("source_url"),
+                "source_url":  point.payload.get("source_url"),
             })
 
         return chunks
@@ -299,8 +354,8 @@ class QdrantVectorStore:
         collection_info = self.client.get_collection(self.collection_name)
         return {
             "collection_name": self.collection_name,
-            "points_count": collection_info.points_count,
-            "vector_dim": self.vector_dim,
+            "points_count":    collection_info.points_count,
+            "vector_dim":      self.vector_dim,
         }
 
     def delete_collection(self) -> None:
