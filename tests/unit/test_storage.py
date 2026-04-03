@@ -5,11 +5,18 @@ Qdrant + Kuzu + SQLite を束ねる KnowledgeStore の基本動作を、
 軽量な埋め込みモックで検証する。
 
 【修正履歴】
-  2026-04-03: monkeypatch.setattr の lambda に classmethod/staticmethod ラッパー不要。
-              Embedder.get_instance は classmethod だが、monkeypatch は
-              属性を直接置換するため、通常の関数（lambda）をそのまま渡せばよい。
-              また _FakeEmbedder.encode_single の戻り値を list[float] に修正
-              （QdrantVectorStore が list を期待する実装の場合に対応）。
+  2026-04-03 (fix #1):
+    monkeypatch.setattr の lambda に classmethod ラッパー不要と記載していたが、
+    実際は Embedder.get_instance (classmethod) に lambda を差し込むと
+    呼び出し時に cls が第1引数として渡って TypeError が発生する。
+    except で握り潰されてベクトルが生成されず Qdrant に何も入らない問題を修正。
+
+  2026-04-03 (fix #2):
+    monkeypatch ターゲットを Embedder.get_instance から
+    QdrantVectorStore._get_embedder に変更。
+    _get_embedder は通常のインスタンスメソッドなので
+    lambda self: fake_embedder で正しく差し替えられる。
+    classmethod の呼び出し規約の問題を根本的に回避する。
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.sba.storage import vector_store as vector_store_module
+from src.sba.storage.vector_store import QdrantVectorStore
 from src.sba.storage.knowledge_store import KnowledgeStore
 
 
@@ -51,16 +58,24 @@ def knowledge_store(tmp_path, monkeypatch):
     """
     テスト用 KnowledgeStore を作成。
 
-    Embedder.get_instance を FakeEmbedder を返すように差し替える。
-    monkeypatch.setattr は属性を直接置換するため classmethod ラッパーは不要。
+    【修正】monkeypatch ターゲットを QdrantVectorStore._get_embedder に変更。
+
+    理由:
+      Embedder.get_instance は classmethod のため、
+      monkeypatch.setattr(Embedder, "get_instance", lambda: fake) とすると
+      呼び出し時に cls が第1引数として渡り TypeError が発生する。
+      except で握り潰されてベクトルが生成されず Qdrant に何も入らない。
+
+      _get_embedder は通常のインスタンスメソッドなので
+      lambda self: fake_embedder で正しく差し替えられる。
     """
     fake_embedder = _FakeEmbedder()
 
-    # classmethod だが monkeypatch は単純に属性を置換するだけでよい
+    # QdrantVectorStore._get_embedder を直接差し替える（classmethod 問題を回避）
     monkeypatch.setattr(
-        vector_store_module.Embedder,
-        "get_instance",
-        lambda: fake_embedder,
+        QdrantVectorStore,
+        "_get_embedder",
+        lambda self: fake_embedder,
     )
 
     store = KnowledgeStore(str(tmp_path), "test-brain")
@@ -125,7 +140,5 @@ def test_mark_deprecated_and_review_flags(knowledge_store: KnowledgeStore):
 
     chunk = knowledge_store.get_chunk(chunk_id)
     assert chunk is not None, f"get_chunk({chunk_id!r}) が None を返した"
-    # Kuzu の graph_store.get_knowledge_chunk が返す値を直接アサート
-    # bool(...) でキャストして MagicMock 混入を防ぐ
     assert bool(chunk["requires_human_review"]) is True
     assert bool(chunk["is_deprecated"]) is True
