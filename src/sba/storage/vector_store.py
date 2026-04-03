@@ -13,14 +13,14 @@ Brain Hot-Swap との相性:
 
 【修正履歴】
   __init__ で即時実行していた Embedder.get_instance() を廃止。
-  monkeypatch がコンストラクタ後に適用されるテスト環境では
-  モックが間に合わないため、初回使用時に取得する遅延初期化に変更。
-  _get_embedder() メソッド経由で self._embedder キャッシュを利用する。
+  遅延初期化を導入したが、キャッシュがあると monkeypatch 後の
+  差し替えが無視されるため、キャッシュを持たず毎回
+  Embedder.get_instance() に委論する方式に変更。
+  本番時は Embedder 軽で、Singleton がキャッシュするのでパフォーマンス影響なし。
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 from typing import Optional
 from pathlib import Path
@@ -52,11 +52,11 @@ class QdrantVectorStore:
             vector_index_path: Qdrant ローカルディレクトリパス
             brain_id: Brain UUID（コレクション名の一部）
 
-        【遅延初期化】
-            Embedder はここでは取得しない。
-            monkeypatch / DI が __init__ の後に適用されるケースで
-            モックが効かなくなるのを防ぐため、_get_embedder() で
-            初回アクセス時に取得する設計にしている。
+        【設計方针】
+            Embedder は __init__ で取得しない。
+            _get_embedder() 経由で常に Embedder.get_instance() を呼び出すことで
+            monkeypatch / DI への互換性を保つ。
+            本番時は Embedder の Singleton がキャッシュするのでパフォーマンス影響なし。
         """
         self.vector_index_path = Path(vector_index_path)
         self.vector_index_path.mkdir(parents=True, exist_ok=True)
@@ -65,9 +65,6 @@ class QdrantVectorStore:
         self.collection_name = f"brain_{brain_id}"[:64]  # Qdrant 制限
         self.vector_dim = 1024  # bge-m3 の次元数
 
-        # 遅延初期化: __init__ では None にしておく
-        self._embedder: Optional[Embedder] = None
-
         # Qdrant ローカルクライアント
         self.client = QdrantClient(path=str(self.vector_index_path))
 
@@ -75,32 +72,30 @@ class QdrantVectorStore:
         self._ensure_collection()
 
     # ======================================================================
-    # Embedder 遅延取得
+    # Embedder 遅延取得（キャッシュなし・毎回委論）
     # ======================================================================
 
     def _get_embedder(self) -> Embedder:
         """
-        Embedder シングルトンを遅延取得して返す。
+        Embedder を毎回 Embedder.get_instance() 経由で取得する。
 
-        キャッシュ済みであればそのまま返し、
-        未取得であれば Embedder.get_instance() を呼んで self._embedder にキャッシュする。
-        テスト時に monkeypatch で差し替えたモックがここで正しく適用される。
+        キャッシュを持たない理由:
+          - monkeypatch がコンストラクタ後に Embedder.get_instance を差し替える場合、
+            self._embedder キャッシュがあると差し替え前のインスタンスが残る。
+          - 本番時は Embedder 軽が Singleton キャッシュするので、毎回呼び出してもパフォーマンス影響なし。
         """
-        if self._embedder is None:
-            self._embedder = Embedder.get_instance()
-        return self._embedder
+        return Embedder.get_instance()
 
     def _ensure_collection(self) -> None:
         """コレクションが存在しなければ作成"""
         try:
             self.client.get_collection(self.collection_name)
         except Exception:
-            # コレクション非存在 → 新規作成
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
                     size=self.vector_dim,
-                    distance=Distance.COSINE,  # コサイン類似度
+                    distance=Distance.COSINE,
                 ),
             )
 
@@ -130,10 +125,7 @@ class QdrantVectorStore:
         if not chunks:
             return []
 
-        # 遅延取得した Embedder を使用
         embedder = self._get_embedder()
-
-        # テキストをまとめてベクトル化
         texts = [chunk["text"] for chunk in chunks]
         vectors = embedder.encode(texts)
 
@@ -144,7 +136,6 @@ class QdrantVectorStore:
             point_id = str(uuid.uuid4())
             point_ids.append(point_id)
 
-            # メタデータ（フィルタに使用）
             payload = {
                 "chunk_id": chunk.get("id", str(uuid.uuid4())),
                 "text": chunk["text"],
@@ -162,7 +153,6 @@ class QdrantVectorStore:
             )
             points.append(point)
 
-        # バッチ upsert
         self.client.upsert(
             collection_name=self.collection_name,
             points=points,
@@ -189,11 +179,9 @@ class QdrantVectorStore:
         Returns:
             [{"chunk_id": str, "text": str, "score": float, ...}, ...]
         """
-        # 遅延取得した Embedder を使用
         embedder = self._get_embedder()
         query_vector = embedder.encode_single(query_text)
 
-        # フィルタ条件
         filter_cond = None
         if subskill_id:
             filter_cond = Filter(
@@ -205,9 +193,7 @@ class QdrantVectorStore:
                 ]
             )
 
-        # 新しいAPI: query_points を使用
         try:
-            # 旧API (1.x) の互換性
             results = self.client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector.tolist(),
@@ -216,7 +202,6 @@ class QdrantVectorStore:
                 score_threshold=score_threshold,
             )
         except AttributeError:
-            # 最新API では query を使う可能性
             results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector.tolist(),
@@ -254,7 +239,6 @@ class QdrantVectorStore:
         Returns:
             重複が見つかった場合は dict、見つからなかった場合は None
         """
-        # _get_embedder() 経由なので DEDUP_THRESHOLD もモック対象から正しく取得できる
         embedder = self._get_embedder()
         results = self.search(
             query_text=text,
@@ -281,13 +265,6 @@ class QdrantVectorStore:
     ) -> list[dict]:
         """
         SubSkill 別にチャンク一覧取得。
-
-        Args:
-            subskill_id: SubSkill ID
-            limit: 結果数上限
-
-        Returns:
-            チャンク情報リスト
         """
         filter_cond = Filter(
             must=[
@@ -298,7 +275,6 @@ class QdrantVectorStore:
             ]
         )
 
-        # スクロール取得
         points = self.client.scroll(
             collection_name=self.collection_name,
             scroll_filter=filter_cond,
