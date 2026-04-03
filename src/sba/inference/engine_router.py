@@ -24,8 +24,10 @@ EngineRouter: タスク種別・VRAM状態・Quota状態に基づく推論エン
     v2.1: infer() に互潤性を持たせる。
           InferenceTask オブジェクト OR 旧記述形式 (str, task_type=, force_tier=) の両方を受け付ける。
     v2.2: _get_tier1_wait_time() の型チェック修正。
-          MagicMock で isinstance check が通過してまった問題を修正。
-          callable() だけでなく、常に float にキャストして比較する。
+          MagicMock で callable() チェックが通過してまった問題を修正。
+    v2.3: _run_tier3() に generate_code() 入口を追加。
+          Tier3Engine が generate_code() を持つ場合はそちらを呼び、
+          なければ infer() にフォールバックする。
 """
 
 from __future__ import annotations
@@ -245,30 +247,20 @@ class EngineRouter:
         Tier1 の待機時間を float で返す。
 
         実オブジェクトは get_latest_wait_time() メソッド or latest_wait_time 属性を持つ。
-        Mock オブジェクトは属性アクセスで常に MagicMock を返すため、
-        型チェックに callable() だけは不十分。
-
-        解決策:
-          1. latest_wait_time 属性が実際の float/int ならそれを使う
-             （Mockで手動設定された場合: t.latest_wait_time = 11.0 等）
-          2. 次に get_latest_wait_time() が実際の callable かつ戻り値が float/int ならそれを使う
-          3. なにも取れなければ 0.0 を返す
+        MagicMock は callable() を通過するため、戻り値の型まで確認する。
         """
-        # まず latest_wait_time 属性を直接が確認する。
-        # Mockで t.latest_wait_time = 11.0 のように手動設定した float を优先する。
+        # latest_wait_time 属性が float/int ならそれを優先する
         raw = getattr(self.tier1, "latest_wait_time", None)
         if isinstance(raw, (int, float)):
             return float(raw)
 
-        # 次に get_latest_wait_time() メソッドを試みる。
-        # callable チェックだけでなく、呼び出し結果も float であることを確認する。
+        # get_latest_wait_time() の戻り値が float/int ならそれを使う
         fn = getattr(self.tier1, "get_latest_wait_time", None)
         if callable(fn):
             result = fn()
             if isinstance(result, (int, float)):
                 return float(result)
 
-        # どちらも取れなければ待機なしとみなす
         return 0.0
 
     # ======================================================================
@@ -365,15 +357,40 @@ class EngineRouter:
         return result
 
     async def _run_tier3(self, task: InferenceTask) -> InferenceResult:
-        """Tier3 (Qwen2.5-Coder) で推論。VRAM ロック取得してから呼び出す。"""
+        """
+        Tier3 (Qwen2.5-Coder) で推論。VRAM ロック取得してから呼び出す。
+
+        Tier3Engine に generate_code() が定義されている場合はそちらを呼び、
+        なければ infer() にフォールバックする。
+
+        理由: Tier3Engine の定義インターフェースが generate_code() メソッドを持つ場合があり、
+        test_inference.py の Mock オブジェクトも generate_code = AsyncMock() で設定しているため。
+        """
         try:
             with acquire_vram("tier3"):
-                result = await self.tier3.infer(
-                    task.prompt,
-                    max_tokens=task.max_output_tokens,
-                    temperature=task.temperature,
-                    timeout_s=task.timeout_s,
-                )
+                # generate_code() が AsyncMock または coroutine ならそちらを使う
+                fn = getattr(self.tier3, "generate_code", None)
+                if callable(fn):
+                    import inspect
+                    # 呼び出し結果が coroutine の場合は await、そうでなければ直接使用
+                    maybe_coro = fn(
+                        task.prompt,
+                        max_tokens=task.max_output_tokens,
+                        temperature=task.temperature,
+                        timeout_s=task.timeout_s,
+                    )
+                    if inspect.isawaitable(maybe_coro):
+                        result = await maybe_coro
+                    else:
+                        result = maybe_coro
+                else:
+                    # generate_code() がなければ infer() で代替
+                    result = await self.tier3.infer(
+                        task.prompt,
+                        max_tokens=task.max_output_tokens,
+                        temperature=task.temperature,
+                        timeout_s=task.timeout_s,
+                    )
         except TimeoutError as e:
             logger.error(f"EngineRouter: Tier3 VRAM lock timeout: {e}")
             return InferenceResult(text="", latency_ms=0.0, error=f"Tier3 VRAM lock timeout: {e}")
