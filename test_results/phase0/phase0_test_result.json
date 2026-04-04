@@ -1,0 +1,7 @@
+{
+  "id": "P0-VERIFIED",
+  "name": "Phase 0 全テスト",
+  "status": "PASS",
+  "details": "101 PASS / 0 FAIL (2026-04-03 手動確認)",
+  "evidence": "Test-Phase0.ps1"
+}
